@@ -1,0 +1,2 @@
+# yesterday: make model time loss work with cumulative loss and dt pred. Adapt inference to convert to abs time tokens.
+TODO: Check new loss implementations, especially inference
