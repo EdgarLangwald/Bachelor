@@ -384,6 +384,7 @@ def create_dataset(
             aug_tokens = tokenize_segs(aug_segments)
             dataset.add_tracks(aug_notes, aug_tokens)
 
-    print(f"Saving dataset to {output_file}...")
-    safe_to_pkl(dataset, output_file)
+    save_path = Path("saves") / output_file
+    print(f"Saving dataset to {save_path}...")
+    safe_to_pkl(dataset, str(save_path))
     print("Dataset creation complete!")

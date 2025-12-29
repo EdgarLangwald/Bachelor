@@ -1,0 +1,30 @@
+# Ignore everything
+*
+
+# But keep these
+!.gitignore
+!CLAUDE.md
+!main.ipynb
+!main.py
+
+# Keep codebase folder and its contents
+!codebase/
+!codebase/**
+
+# But ignore Python cache and compiled files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Ignore model saves and large files
+saves/
+*.pt
+*.pkl
+
+# Ignore venv
+ML_with_Torch_venv/
+
+# Ignore dataset
+maestro-v3.0.0/
+Images/

@@ -28,32 +28,30 @@ def generate(model, notes: List[Note], max_length: int = 127, device: str = 'cpu
 
         last_idx = tgt_len - 1
 
-        if step >= 2:
-            stop_score = torch.sigmoid(model_output['stop'][0, last_idx, 0])
-            should_stop = Bernoulli(stop_score).sample().item() > 0.5
-            if should_stop:
-                break
-
         height_params = F.softplus(model_output['height'][0, last_idx]) + 1e-6
         height = Beta(height_params[0], height_params[1]).sample().item()
 
         amount_params = F.softplus(model_output['amount'][0, last_idx]) + 1e-6
         amount = Beta(amount_params[0], amount_params[1]).sample().item()
 
-        time_delta = F.softplus(model_output['time'][0, last_idx, 0]).item()
+        log_time_delta = model_output['time'][0, last_idx, 0]
+        time_delta = torch.exp(log_time_delta).item()
         cumulative_time = generated_tokens[-1].time + time_delta
 
         generated_tokens.append(SegmentToken(height=height, amount=amount, time=cumulative_time))
+        
+        if generated_tokens[-1].time >= 10:
+            break
 
-    return generated_tokens + [SegmentToken(0, 0, 0)]
+    return generated_tokens
 
 
 def tokens_to_segs(tokens: List[SegmentToken]) -> List[SegmentEvent]:
-    if len(tokens) < 4:
+    if len(tokens) < 3:
         return []
 
     segments = []
-    segment_tokens = tokens[1:-1]
+    segment_tokens = tokens[1:]
 
     first, second = segment_tokens[0], segment_tokens[1]
     segments.append(SegmentEvent(

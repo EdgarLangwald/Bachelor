@@ -81,8 +81,7 @@ class Dataset(TorchDataset):
             for s in tokens if time <= s.time <= window_end
         ]
         sos = SegmentToken(height=0.0, amount=0.0, time=0.0)
-        eos = SegmentToken(height=0.0, amount=0.0, time=0.0)
-        windowed_tokens = [sos] + windowed_tokens + [eos]
+        windowed_tokens = [sos] + windowed_tokens
 
         return windowed_notes, windowed_tokens
 

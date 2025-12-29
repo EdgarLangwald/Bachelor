@@ -13,42 +13,38 @@ def compute_loss(
 
     epsilon = 1e-6
 
-    stop_logits = model_output['stop'][:, :-1, 0]
     height_params = F.softplus(model_output['height'][:, :-1]) + epsilon
     amount_params = F.softplus(model_output['amount'][:, :-1]) + epsilon
-    pred_delta_times = F.softplus(model_output['time'][:, :-1, 0])
+
+    pred_log_delta_times = model_output['time'][:, :-1, 0]
 
     target_heights = tokens[:, 1:, 0]
     target_amounts = tokens[:, 1:, 1]
     target_times = tokens[:, 1:, 2]
     prev_times = tokens[:, :-1, 2]
-    target_delta_times = target_times - prev_times
+    target_delta_times = torch.clamp(target_times - prev_times, min=epsilon)
+    target_log_delta_times = torch.log(target_delta_times)
 
-    target_stop = torch.zeros_like(stop_logits)
-    mask = ~tgt_key_padding_mask
-    seq_lengths = mask.sum(dim=1)
-    for i in range(target_stop.size(0)):
-        last_pred_pos = seq_lengths[i] - 2
-        if last_pred_pos >= 0:
-            target_stop[i, last_pred_pos] = 1.0
-    pos_weight = torch.tensor(10.0, device=stop_logits.device)
-    stop_loss = F.binary_cross_entropy_with_logits(stop_logits, target_stop, pos_weight=pos_weight)
+    mask = ~tgt_key_padding_mask[:, 1:]
 
-    heights = torch.clamp(target_heights[:, :-1], epsilon, 1.0 - epsilon)
-    alpha_h, beta_h = height_params[:, :-1, 0], height_params[:, :-1, 1]
+    heights = torch.clamp(target_heights[mask], epsilon, 1.0 - epsilon)
+    masked_height_params = height_params[mask]
+    alpha_h, beta_h = masked_height_params[:, 0], masked_height_params[:, 1]
     height_loss = -Beta(alpha_h, beta_h).log_prob(heights).mean()
 
-    amounts = torch.clamp(target_amounts[:, 1:-1], epsilon, 1.0 - epsilon)
-    alpha_a, beta_a = amount_params[:, 1:-1, 0], amount_params[:, 1:-1, 1]
+    amounts = torch.clamp(target_amounts[mask], epsilon, 1.0 - epsilon)
+    masked_amount_params = amount_params[mask]
+    alpha_a, beta_a = masked_amount_params[:, 0], masked_amount_params[:, 1]
     amount_loss = -Beta(alpha_a, beta_a).log_prob(amounts).mean()
 
-    time_loss = F.mse_loss(pred_delta_times[:, :-1], target_delta_times[:, :-1])
+    masked_pred_log_dt = pred_log_delta_times[mask]
+    masked_target_log_dt = target_log_delta_times[mask]
+    time_loss = F.mse_loss(masked_pred_log_dt, masked_target_log_dt)
 
-    total_loss = stop_loss + height_loss + amount_loss + 2 * time_loss
+    total_loss = 1 * height_loss + 0 * amount_loss + 1 * time_loss
 
     loss_dict = {
         'total': total_loss.item(),
-        'stop': stop_loss.item(),
         'height': height_loss.item(),
         'amount': amount_loss.item(),
         'time': time_loss.item()
@@ -84,16 +80,18 @@ def step(model, batch, optimizer, device):
     return loss_dict['total']
 
 
-def train(dataset_path, batch_size, lr, num_steps, device, model=None, print_every=100):
+def train(dataset_path, batch_size, lr, num_steps, device, model=None, print_every=100, dataset=None):
     from .utils import load_pkl
     from torch.utils.data import DataLoader
     from .data import collate_fn
     from .model import Model
     import os
 
-    model_path = 'saves/model.pt'
-    dataset = load_pkl(dataset_path)
+    if dataset is None:
+        dataset = load_pkl(dataset_path)
+    
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
+    model_path = 'saves/model.pt'
     
     if model is not None:
         print(f"Using provided model")
@@ -110,8 +108,6 @@ def train(dataset_path, batch_size, lr, num_steps, device, model=None, print_eve
 
     while step_count < num_steps:
         for batch in dataloader:
-            if step_count >= num_steps:
-                break
 
             loss = step(model, batch, optimizer, device)
             window_loss += loss

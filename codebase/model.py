@@ -35,7 +35,6 @@ class SegmentEmbedding(nn.Module):
         self.d_model = d_model
         assert (d_model // 3) * 3 == d_model, "d_model must be diviseable by 3 and 4"
         self.sos_embed = nn.Parameter(torch.randn(d_model))
-        self.eos_embed = nn.Parameter(torch.randn(d_model))
 
         embed_dim = d_model // 3
         self.height_embed = nn.Linear(1, embed_dim)
@@ -49,15 +48,11 @@ class SegmentEmbedding(nn.Module):
         embeddings = torch.zeros(batch_size, seq_len, self.d_model, device=device)
 
         embeddings[:, 0] = self.sos_embed
-        if seq_len > 1:
-            embeddings[:, -1] = self.eos_embed
 
         if seq_len > 2:
             h1 = self.height_embed(tokens[:, 1:2, 0].unsqueeze(-1))
             t1 = self.time_embed(tokens[:, 1:2, 2].unsqueeze(-1))
             embeddings[:, 1] = torch.cat([h1.squeeze(1), self.first_amount_vector.unsqueeze(0).expand(batch_size, -1), t1.squeeze(1)], dim=-1)
-
-        if seq_len > 3:
             h = self.height_embed(tokens[:, 2:-1, 0].unsqueeze(-1))
             a = self.amount_embed(tokens[:, 2:-1, 1].unsqueeze(-1))
             t = self.time_embed(tokens[:, 2:-1, 2].unsqueeze(-1))
@@ -103,10 +98,9 @@ class Model(nn.Module):
             batch_first=True
         )
 
-        self.stop_head = nn.Linear(d_model, 1)
         self.height_head = nn.Linear(d_model, 2)
         self.amount_head = nn.Linear(d_model, 2)
-        self.time_head = nn.Linear(d_model, 2)
+        self.time_head = nn.Linear(d_model, 1)
 
     def forward(self, notes, tokens, src_key_padding_mask=None, tgt_mask=None, tgt_key_padding_mask=None):
         note_emb = self.note_embedding(notes)
@@ -130,13 +124,11 @@ class Model(nn.Module):
             memory_key_padding_mask=src_key_padding_mask
         )
 
-        stop_out = self.stop_head(transformer_out)
         height_out = self.height_head(transformer_out)
         amount_out = self.amount_head(transformer_out)
         time_out = self.time_head(transformer_out)
 
         return {
-            'stop': stop_out,
             'height': height_out,
             'amount': amount_out,
             'time': time_out
