@@ -1,9 +1,7 @@
 import torch
-import torch.nn.functional as F
-from torch.distributions import Bernoulli, Beta, LogNormal
 from typing import List
 from .data import SegmentToken, SegmentEvent, Note
-import numpy as np
+
 
 @torch.no_grad
 def generate(model, notes: List[Note], max_length: int = 127, device: str = 'cpu') -> List[SegmentToken]:
@@ -28,18 +26,15 @@ def generate(model, notes: List[Note], max_length: int = 127, device: str = 'cpu
 
         last_idx = tgt_len - 1
 
-        height_params = F.softplus(model_output['height'][0, last_idx]) + 1e-6
-        height = Beta(height_params[0], height_params[1]).sample().item()
-
-        amount_params = F.softplus(model_output['amount'][0, last_idx]) + 1e-6
-        amount = Beta(amount_params[0], amount_params[1]).sample().item()
+        height = model_output['height'][0, last_idx, 0].item()
+        amount = model_output['amount'][0, last_idx, 0].item()
 
         log_time_delta = model_output['time'][0, last_idx, 0]
         time_delta = torch.exp(log_time_delta).item()
         cumulative_time = generated_tokens[-1].time + time_delta
 
         generated_tokens.append(SegmentToken(height=height, amount=amount, time=cumulative_time))
-        
+
         if generated_tokens[-1].time >= 10:
             break
 

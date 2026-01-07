@@ -8,16 +8,54 @@ from .data import SegmentEvent, SegmentToken
 import math
 
 
-def safe_to_pkl(data, filepath: str):
-    Path(filepath).parent.mkdir(parents=True, exist_ok=True)
-    with open(filepath, 'wb') as f:
+def save_pkl(data, filepath: str):
+    save_path = Path("saves") / filepath
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(save_path, 'wb') as f:
         pickle.dump(data, f)
 
 
 def load_pkl(filepath: str):
+    from .data import Dataset
+
     load_path = Path("saves") / filepath
+
+    if load_path.is_dir():
+        dataset = Dataset()
+        chunk_files = sorted(load_path.glob("chunk_*.pkl"))
+
+        if not chunk_files:
+            raise FileNotFoundError(f"No chunk files found in {filepath}")
+
+        for chunk_file in chunk_files:
+            for notes, tokens in load_chunk_streaming(str(chunk_file.relative_to("saves"))):
+                dataset.add_tracks(notes, tokens)
+        return dataset
+
     with open(load_path, 'rb') as f:
         return pickle.load(f)
+
+
+def load_chunk_streaming(filepath: str):
+    load_path = Path("saves") / filepath
+    with open(load_path, 'rb') as f:
+        while True:
+            try:
+                track_data = pickle.load(f)
+                yield track_data
+            except EOFError:
+                break
+
+
+def load_chunk_all(filepath: str):
+    from .data import Dataset
+
+    dataset = Dataset()
+    for notes, tokens in load_chunk_streaming(filepath):
+        dataset.add_tracks(notes, tokens)
+    return dataset
+
+
 
 
 def segs_to_curve(segments: List[SegmentEvent], num_points: int = 1000):
@@ -68,6 +106,7 @@ def plot_list(
         line=dict(color='red', width=2,)
     ))
 
+    tokens = tokens[1:]
     if tokens is not None:
         token_times = [token.time for token in tokens]
         token_heights = [token.height for token in tokens]
@@ -90,18 +129,24 @@ def plot_list(
     return fig
 
 
-def visualize_model(model, dataset, num_plots: int, device: str = 'cpu', exclude_context: bool = False):
-    from .inference import generate, tokens_to_segs
+def visualize_model(model, dataset, num_plots: int, device: str = 'cpu', exclude_context: bool = False, show_notes: bool = True, generate: bool = True):
+    from .inference import generate as generate_fn, tokens_to_segs
     from .data import Note
 
-    rows = int(math.ceil(math.sqrt(num_plots)))
-    cols = int(math.ceil(num_plots / rows))
+    max_cols = 7
+    if num_plots >= 35:
+        cols = max_cols
+    else:
+        cols = min(max_cols, int(math.ceil(math.sqrt(num_plots))))
+
+    rows = int(math.ceil(num_plots / cols))
+    scale_factor = min(max_cols / cols, 3.5)
 
     fig = make_subplots(
         rows=rows,
         cols=cols,
-        vertical_spacing=0.02,
-        horizontal_spacing=0.02
+        vertical_spacing=0.015,
+        horizontal_spacing=0.015
     )
 
     for i in range(num_plots):
@@ -111,53 +156,72 @@ def visualize_model(model, dataset, num_plots: int, device: str = 'cpu', exclude
         notes, tokens = dataset[0]
 
         if exclude_context:
-            notes = [Note(start=0.0, duration=0.1, pitch=60, velocity=1)]
+            notes = [Note(start=(10/88)*i, duration=10/88, pitch=i, velocity=1) for i in range(88)]
             tokens = []
 
-        generated_tokens = generate(model, notes, max_length=127, device=device)
-        generated_segs = tokens_to_segs(generated_tokens)
         ground_truth_segs = tokens_to_segs(tokens)
-
         gt_times, gt_values = segs_to_curve(ground_truth_segs)
-        gen_times, gen_values = segs_to_curve(generated_segs)
+
+        if generate:
+            generated_tokens = generate_fn(model, notes, max_length=127, device=device)
+            generated_segs = tokens_to_segs(generated_tokens)
+            gen_times, gen_values = segs_to_curve(generated_segs)
+
+        if show_notes:
+            for note in notes:
+                y_bottom = note.pitch / 88
+                y_top = (note.pitch + 1) / 88
+
+                fig.add_shape(
+                    type='rect',
+                    x0=note.start,
+                    x1=note.start + note.duration,
+                    y0=y_bottom,
+                    y1=y_top,
+                    fillcolor='rgba(144, 238, 144, 0.75)',
+                    line=dict(width=0),
+                    row=row,
+                    col=col
+                )
 
         fig.add_trace(go.Scatter(
             x=gt_times,
             y=gt_values,
             mode='lines',
             name='Ground Truth',
-            line=dict(color='blue', width=0.75),
+            line=dict(color='blue', width=0.75 * scale_factor),
             showlegend=False,
             hoverinfo='skip'
         ), row=row, col=col)
 
-        fig.add_trace(go.Scatter(
-            x=gen_times,
-            y=gen_values,
-            mode='lines',
-            name='Generated',
-            line=dict(color='red', width=0.75),
-            showlegend=False,
-            hoverinfo='skip'
-        ), row=row, col=col)
+        if generate:
+            fig.add_trace(go.Scatter(
+                x=gen_times,
+                y=gen_values,
+                mode='lines',
+                name='Generated',
+                line=dict(color='red', width=0.75 * scale_factor),
+                showlegend=False,
+                hoverinfo='skip'
+            ), row=row, col=col)
 
-        token_times = [token.time for token in generated_tokens]
-        token_heights = [token.height for token in generated_tokens]
-        fig.add_trace(go.Scatter(
-            x=token_times,
-            y=token_heights,
-            mode='markers',
-            name='Tokens',
-            marker=dict(size=1.3, color='orange'),
-            showlegend=False,
-            hoverinfo='skip'
-        ), row=row, col=col)
+            token_times = [token.time for token in generated_tokens]
+            token_heights = [token.height for token in generated_tokens]
+            fig.add_trace(go.Scatter(
+                x=token_times,
+                y=token_heights,
+                mode='markers',
+                name='Tokens',
+                marker=dict(size=1.6 * scale_factor, color='orange'),
+                showlegend=False,
+                hoverinfo='skip'
+            ), row=row, col=col)
 
     fig.update_xaxes(showticklabels=False, showgrid=False, zeroline=False)
     fig.update_yaxes(showticklabels=False, showgrid=False, zeroline=False)
 
-    height_per_plot = 100
-    width_per_plot = 125
+    height_per_plot = 70 * scale_factor
+    width_per_plot = 125 * scale_factor
     fig.update_layout(
         height=height_per_plot * rows,
         width=width_per_plot * cols,

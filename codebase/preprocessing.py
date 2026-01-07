@@ -352,16 +352,35 @@ def tokenize_segs(segments: List[SegmentEvent]) -> List[SegmentToken]:
     return tokens
 
 
+def _process_single_track(args):
+    idx, path, seg_fit_tightness = args
+    try:
+        pedal_events, note_events = get_track(path)
+        segments = pedals_to_segs(pedal_events, epsilon=seg_fit_tightness)
+        augmented_tracks = augment(note_events, segments)
+
+        results = []
+        for aug_notes, aug_segments in augmented_tracks:
+            aug_tokens = tokenize_segs(aug_segments)
+            results.append((aug_notes, aug_tokens))
+
+        return idx, results, None
+    except Exception as e:
+        return idx, None, str(e)
+
+
 def create_dataset(
     split: str = "train",
     dataset_path: str = "maestro-v3.0.0",
-    output_file: str = "dataset.pkl",
+    output_file: str = "dataset",
     seg_fit_tightness: float = 0.12,
     nocturnes: bool = False,
-    track_idx: int = None
+    track_idx: int = None,
+    num_workers: int = 1,
+    max_chunk_size_mb: float = 80
 ):
-    from .utils import safe_to_pkl
-    from .data import Dataset
+    import pickle
+    import os
 
     print(f"Loading paths...")
     paths = get_paths(split, dataset_path, nocturnes)
@@ -371,20 +390,86 @@ def create_dataset(
 
     print(f"Found {len(paths)} tracks")
 
-    dataset = Dataset()
+    output_dir = Path("saves") / output_file
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    for idx, path in enumerate(paths):
-        print(f"Processing track {idx+1}/{len(paths)}: {Path(path).name}")
+    max_chunk_bytes = max_chunk_size_mb * 1024 * 1024
+    chunk_idx = 0
+    current_chunk_path = output_dir / f"chunk_{chunk_idx}.pkl"
+    chunk_file = open(current_chunk_path, 'wb')
+    chunk_tracks = 0
+    total_augmented = 0
 
-        pedal_events, note_events = get_track(path)
-        segments = pedals_to_segs(pedal_events, epsilon=seg_fit_tightness)
-        augmented_tracks = augment(note_events, segments)
+    def dump_track(track_results):
+        nonlocal chunk_idx, chunk_file, chunk_tracks, current_chunk_path
 
-        for aug_notes, aug_segments in augmented_tracks:
-            aug_tokens = tokenize_segs(aug_segments)
-            dataset.add_tracks(aug_notes, aug_tokens)
+        for track_data in track_results:
+            pickle.dump(track_data, chunk_file)
+            chunk_tracks += 1
 
-    save_path = Path("saves") / output_file
-    print(f"Saving dataset to {save_path}...")
-    safe_to_pkl(dataset, str(save_path))
-    print("Dataset creation complete!")
+        current_size = os.path.getsize(current_chunk_path)
+        if current_size >= max_chunk_bytes:
+            chunk_file.close()
+            print(f"Completed chunk_{chunk_idx}.pkl ({chunk_tracks} tracks, {current_size / 1024 / 1024:.1f}MB)")
+            chunk_idx += 1
+            chunk_tracks = 0
+            current_chunk_path = output_dir / f"chunk_{chunk_idx}.pkl"
+            chunk_file = open(current_chunk_path, 'wb')
+
+        return len(track_results)
+
+    if num_workers == 1:
+        for idx, path in enumerate(paths):
+            print(f"Processing track {idx+1}/{len(paths)}: {Path(path).name}")
+            pedal_events, note_events = get_track(path)
+            segments = pedals_to_segs(pedal_events, epsilon=seg_fit_tightness)
+            augmented_tracks = augment(note_events, segments)
+
+            track_results = []
+            for aug_notes, aug_segments in augmented_tracks:
+                aug_tokens = tokenize_segs(aug_segments)
+                track_results.append((aug_notes, aug_tokens))
+
+            num_augmented = dump_track(track_results)
+            total_augmented += num_augmented
+    else:
+        from multiprocessing import Pool, cpu_count
+        import time
+
+        if num_workers is None or num_workers == -1:
+            num_workers = cpu_count()
+        elif num_workers <= 0:
+            num_workers = max(1, cpu_count() + num_workers)
+
+        print(f"Using {num_workers} parallel workers")
+        args_list = [(idx, path, seg_fit_tightness) for idx, path in enumerate(paths)]
+
+        failed_tracks = []
+        completed = 0
+        start_time = time.time()
+
+        with Pool(processes=num_workers) as pool:
+            for idx, track_results, error in pool.imap_unordered(_process_single_track, args_list):
+                completed += 1
+                elapsed = time.time() - start_time
+                avg_time = elapsed / completed
+                eta = avg_time * (len(paths) - completed)
+
+                if error is not None:
+                    failed_tracks.append((idx, paths[idx], error))
+                    print(f"[{completed}/{len(paths)}] FAILED: {Path(paths[idx]).name} - {error}")
+                else:
+                    num_augmented = dump_track(track_results)
+                    total_augmented += num_augmented
+                    print(f"[{completed}/{len(paths)}] {Path(paths[idx]).name} | "
+                          f"{num_augmented} augmented versions | Avg: {avg_time:.1f}s/track | ETA: {eta/60:.1f}min")
+
+        if failed_tracks:
+            print(f"\nWarning: {len(failed_tracks)} tracks failed")
+
+    chunk_file.close()
+    final_size = os.path.getsize(current_chunk_path)
+    if final_size > 0:
+        print(f"Completed chunk_{chunk_idx}.pkl ({chunk_tracks} tracks, {final_size / 1024 / 1024:.1f}MB)")
+
+    print(f"\nDataset creation complete! Saved {len(paths)} tracks with {total_augmented} total augmented versions across {chunk_idx + 1} chunks in {output_dir}")

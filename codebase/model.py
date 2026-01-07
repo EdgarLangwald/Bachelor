@@ -49,14 +49,16 @@ class SegmentEmbedding(nn.Module):
 
         embeddings[:, 0] = self.sos_embed
 
-        if seq_len > 2:
+        if seq_len > 1:
             h1 = self.height_embed(tokens[:, 1:2, 0].unsqueeze(-1))
             t1 = self.time_embed(tokens[:, 1:2, 2].unsqueeze(-1))
             embeddings[:, 1] = torch.cat([h1.squeeze(1), self.first_amount_vector.unsqueeze(0).expand(batch_size, -1), t1.squeeze(1)], dim=-1)
-            h = self.height_embed(tokens[:, 2:-1, 0].unsqueeze(-1))
-            a = self.amount_embed(tokens[:, 2:-1, 1].unsqueeze(-1))
-            t = self.time_embed(tokens[:, 2:-1, 2].unsqueeze(-1))
-            embeddings[:, 2:-1] = torch.cat([h, a, t], dim=-1)
+
+        if seq_len > 2:
+            h = self.height_embed(tokens[:, 2:, 0].unsqueeze(-1))
+            a = self.amount_embed(tokens[:, 2:, 1].unsqueeze(-1))
+            t = self.time_embed(tokens[:, 2:, 2].unsqueeze(-1))
+            embeddings[:, 2:] = torch.cat([h, a, t], dim=-1)
 
         return embeddings
 
@@ -85,8 +87,8 @@ class Model(nn.Module):
 
         self.note_embedding = NoteEmbedding(d_model)
         self.segment_embedding = SegmentEmbedding(d_model)
-        self.note_pos_emb = nn.Embedding(512, d_model)
-        self.seg_pos_emb = nn.Embedding(128, d_model)
+        self.note_pos_emb = nn.Embedding(600, d_model)
+        self.seg_pos_emb = nn.Embedding(150, d_model)
 
         self.transformer = nn.Transformer(
             d_model=d_model,
@@ -98,8 +100,8 @@ class Model(nn.Module):
             batch_first=True
         )
 
-        self.height_head = nn.Linear(d_model, 2)
-        self.amount_head = nn.Linear(d_model, 2)
+        self.height_head = nn.Linear(d_model, 1)
+        self.amount_head = nn.Linear(d_model, 1)
         self.time_head = nn.Linear(d_model, 1)
 
     def forward(self, notes, tokens, src_key_padding_mask=None, tgt_mask=None, tgt_key_padding_mask=None):
@@ -124,8 +126,8 @@ class Model(nn.Module):
             memory_key_padding_mask=src_key_padding_mask
         )
 
-        height_out = self.height_head(transformer_out)
-        amount_out = self.amount_head(transformer_out)
+        height_out = torch.sigmoid(4 * self.height_head(transformer_out) - 2)
+        amount_out = torch.sigmoid(4 * self.amount_head(transformer_out) - 2)
         time_out = self.time_head(transformer_out)
 
         return {
@@ -134,11 +136,12 @@ class Model(nn.Module):
             'time': time_out
         }
 
-    def save(self, path: str = 'saves/model.pt'):
+    def save(self, path: str = 'model.pt'):
         import torch
         from pathlib import Path
         import contextlib, io
 
+        path = f'saves/{path}'
         Path(path).parent.mkdir(parents=True, exist_ok=True)
 
         checkpoint = {
@@ -153,8 +156,9 @@ class Model(nn.Module):
         return None
 
     @classmethod
-    def load(cls, path: str = 'saves/model.pt', device: str = 'cpu'):
+    def load(cls, path: str = 'model.pt', device: str = 'cpu'):
         import torch
+        path = f'saves/{path}'
         checkpoint = torch.load(path, map_location=device, weights_only=True)
         model = cls(**checkpoint['config'])
         model.load_state_dict(checkpoint['state_dict'])

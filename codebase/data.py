@@ -48,6 +48,8 @@ class Dataset(TorchDataset):
         return notes[-1].start + notes[-1].duration
 
     def __call__(self, track_idx: int = None, time: float = None, window_size=10) -> Tuple[List[Note], List[SegmentToken]]:
+        from .preprocessing import segment
+
         if track_idx is None:
             track_idx = random.randint(0, len(self.tracks) - 1)
 
@@ -78,12 +80,49 @@ class Dataset(TorchDataset):
                 amount=s.amount,
                 time=s.time - time
             )
-            for s in tokens if time <= s.time <= window_end
+            for s in tokens if time < s.time < window_end
         ]
+
         sos = SegmentToken(height=0.0, amount=0.0, time=0.0)
-        windowed_tokens = [sos] + windowed_tokens
+        result_tokens = [sos]
+
+        if tokens[0].time <= time and tokens[-1].time > time:
+            left_border_token = self._create_border_token(tokens, time, window_size, is_left=True)
+            result_tokens.append(left_border_token)
+
+        result_tokens.extend(windowed_tokens)
+
+        if tokens[0].time <= window_end and tokens[-1].time > window_end:
+            right_border_token = self._create_border_token(tokens, time, window_size, is_left=False)
+            result_tokens.append(right_border_token)
+
+        windowed_tokens = result_tokens
 
         return windowed_notes, windowed_tokens
+
+    def _create_border_token(self, tokens: List[SegmentToken], time: float, window_size: float, is_left: bool) -> SegmentToken:
+        from .preprocessing import segment
+
+        border_time = time if is_left else time + window_size
+
+        left_token = None
+        right_token = None
+        for i, token in enumerate(tokens):
+            if token.time <= border_time:
+                left_token = token
+            if token.time > border_time and right_token is None:
+                right_token = token
+                break
+
+        assert left_token is not None and right_token is not None, "Border tokens not found"
+
+        seg = segment(left_token.time, left_token.height, right_token.time, right_token.height, right_token.amount)
+        border_height = seg(border_time)
+
+        if is_left:
+            return SegmentToken(height=border_height, amount=0.0, time=0.0)
+        else:
+            return SegmentToken(height=border_height, amount=right_token.amount, time=window_size)
 
     def __getitem__(self, idx: int) -> Tuple[List[Note], List[SegmentToken]]:
         return self()
@@ -93,38 +132,39 @@ class Dataset(TorchDataset):
 
 
 def collate_fn(batch: List[Tuple[List[Note], List[SegmentToken]]]) -> Dict[str, torch.Tensor]:
-    batch_notes = []
-    batch_tokens = []
+    MAX_NOTES = 600
+    MAX_TOKENS = 150
 
-    for notes, tokens in batch:
-        batch_notes.append(notes)
-        batch_tokens.append(tokens)
+    batch_notes = [notes[:MAX_NOTES] for notes, _ in batch]
+    batch_tokens = [tokens[:MAX_TOKENS] for _, tokens in batch]
 
     max_note_len = max(len(notes) for notes in batch_notes)
     max_token_len = max(len(tokens) for tokens in batch_tokens)
     batch_size = len(batch)
 
-    notes_data = np.zeros((batch_size, max_note_len, 4), dtype=np.float32)
-    src_key_padding_mask = np.ones((batch_size, max_note_len), dtype=bool)
+    notes_data = torch.zeros((batch_size, max_note_len, 4), dtype=torch.float32)
+    src_key_padding_mask = torch.ones((batch_size, max_note_len), dtype=torch.bool)
 
     for i, notes in enumerate(batch_notes):
         note_len = len(notes)
-        for j, note in enumerate(notes):
-            notes_data[i, j] = [note.start, note.duration, note.pitch, note.velocity]
-        src_key_padding_mask[i, :note_len] = False
+        if note_len > 0:
+            notes_array = np.array([[n.start, n.duration, n.pitch, n.velocity] for n in notes], dtype=np.float32)
+            notes_data[i, :note_len] = torch.from_numpy(notes_array)
+            src_key_padding_mask[i, :note_len] = False
 
-    tokens_data = np.zeros((batch_size, max_token_len, 3), dtype=np.float32)
-    tgt_key_padding_mask = np.ones((batch_size, max_token_len), dtype=bool)
+    tokens_data = torch.zeros((batch_size, max_token_len, 3), dtype=torch.float32)
+    tgt_key_padding_mask = torch.ones((batch_size, max_token_len), dtype=torch.bool)
 
     for i, tokens in enumerate(batch_tokens):
         token_len = len(tokens)
-        for j, token in enumerate(tokens):
-            tokens_data[i, j] = [token.height, token.amount, token.time]
-        tgt_key_padding_mask[i, :token_len] = False
+        if token_len > 0:
+            tokens_array = np.array([[t.height, t.amount, t.time] for t in tokens], dtype=np.float32)
+            tokens_data[i, :token_len] = torch.from_numpy(tokens_array)
+            tgt_key_padding_mask[i, :token_len] = False
 
     return {
-        'notes': torch.from_numpy(notes_data),
-        'tokens': torch.from_numpy(tokens_data),
-        'src_key_padding_mask': torch.from_numpy(src_key_padding_mask),
-        'tgt_key_padding_mask': torch.from_numpy(tgt_key_padding_mask),
+        'notes': notes_data,
+        'tokens': tokens_data,
+        'src_key_padding_mask': src_key_padding_mask,
+        'tgt_key_padding_mask': tgt_key_padding_mask,
     }
