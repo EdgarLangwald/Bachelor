@@ -1,12 +1,15 @@
 import torch
-from test_profiler import run_profiled_training
+from codebase.model import Model
+from codebase.data import Dataset
+from codebase.train import train, train_exhaustively
+from codebase.inference import generate, tokens_to_segs
+from codebase.utils import load_pkl, plot_list, visualize_model, load_chunk_all, visualize_teacher_forcing
+from codebase.preprocessing import create_dataset
 
-run_profiled_training(
-    batch_size=8,
-    num_steps=50,
-    device='cuda' if torch.cuda.is_available() else 'cpu',
-    dataset_path='saves/dataset.pkl',
-    model_path='saves/model.pt',
-    num_workers=4,
-    log_every=5
-)
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+dataset = load_chunk_all("complete_dataset/chunk_0.pkl")
+model = Model.load('complete_model.pt', device=device)
+
+fig = visualize_teacher_forcing(model, dataset)
+fig.show()

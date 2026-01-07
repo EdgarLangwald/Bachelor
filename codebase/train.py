@@ -137,7 +137,8 @@ def train_exhaustively(
     model_path="model.pt",
     dataset_path="dataset",
     print_every=100,
-    accumulation_steps=4
+    accumulation_steps=4,
+    num_rotations=1
 ):
     from .utils import load_pkl, load_chunk_all
     from torch.utils.data import DataLoader
@@ -147,13 +148,10 @@ def train_exhaustively(
     import math
     import os
 
-    import multiprocessing
-    multiprocessing.set_start_method('spawn', force=True)
-
     min_lr = lr / 100
     weight_decay = 0.01
     grad_clip = 1.0
-    num_workers = 6
+    num_workers = 0
 
     effective_batch_size = batch_size * accumulation_steps
 
@@ -181,7 +179,7 @@ def train_exhaustively(
             dataset = load_pkl(dataset_path)
             print(f"Loaded single dataset from {dataset_path}")
 
-    total_steps = num_steps * len(chunk_paths) if chunk_paths else num_steps
+    total_steps = num_steps * len(chunk_paths) * num_rotations if chunk_paths else num_steps
     warmup_steps = total_steps // 20
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=min_lr, weight_decay=weight_decay)
@@ -198,39 +196,51 @@ def train_exhaustively(
     accumulation_counter = 0
     optimizer.zero_grad()
 
-    print(f"Training: warmup={warmup_steps}, effective_batch={batch_size}x{accumulation_steps}={effective_batch_size}, workers={num_workers}")
+    print(f"Training: warmup={warmup_steps}, effective_batch={batch_size}x{accumulation_steps}={effective_batch_size}, workers={num_workers}, rotations={num_rotations}")
+    print(f"Total steps: {num_steps} steps/chunk × {len(chunk_paths) if chunk_paths else 1} chunks × {num_rotations} rotations = {total_steps} steps")
     print(f"Optimizations: mixed_precision={'ON' if scaler else 'OFF'}, cudnn_benchmark=ON")
 
     if chunk_paths is not None:
-        chunk_idx = 0
+        rotation = 0
 
-        while chunk_idx < len(chunk_paths):
-            chunk_dataset = load_chunk_all(str(chunk_paths[chunk_idx].relative_to(Path("saves"))))
-            dataloader = DataLoader(
-                chunk_dataset,
-                batch_size=batch_size,
-                shuffle=True,
-                collate_fn=collate_fn,
-                num_workers=num_workers,
-                pin_memory=True,
-                prefetch_factor=2,
-                persistent_workers=True
-            )
+        while rotation < num_rotations:
+            chunk_idx = 0
 
-            chunk_steps = 0
-            for batch in dataloader:
-                model.train()
+            while chunk_idx < len(chunk_paths):
+                chunk_dataset = load_chunk_all(str(chunk_paths[chunk_idx].relative_to(Path("saves"))))
+                dataloader = DataLoader(
+                    chunk_dataset,
+                    batch_size=batch_size,
+                    shuffle=True,
+                    collate_fn=collate_fn,
+                    num_workers=num_workers,
+                    pin_memory=True
+                )
 
-                notes = batch['notes'].to(device)
-                tokens = batch['tokens'].to(device)
-                src_key_padding_mask = batch['src_key_padding_mask'].to(device)
-                tgt_key_padding_mask = batch['tgt_key_padding_mask'].to(device)
+                chunk_steps = 0
+                for batch in dataloader:
+                    model.train()
 
-                seq_len = tokens.size(1)
-                tgt_mask = torch.triu(torch.ones(seq_len, seq_len, device=device), diagonal=1).bool()
+                    notes = batch['notes'].to(device)
+                    tokens = batch['tokens'].to(device)
+                    src_key_padding_mask = batch['src_key_padding_mask'].to(device)
+                    tgt_key_padding_mask = batch['tgt_key_padding_mask'].to(device)
 
-                if scaler:
-                    with torch.amp.autocast('cuda'):
+                    seq_len = tokens.size(1)
+                    tgt_mask = torch.triu(torch.ones(seq_len, seq_len, device=device), diagonal=1).bool()
+
+                    if scaler:
+                        with torch.amp.autocast('cuda'):
+                            model_output = model(
+                                notes, tokens,
+                                src_key_padding_mask=src_key_padding_mask,
+                                tgt_mask=tgt_mask,
+                                tgt_key_padding_mask=tgt_key_padding_mask
+                            )
+                            loss, loss_dict = compute_loss(model_output, tokens, tgt_key_padding_mask)
+                            loss = loss / accumulation_steps
+                        scaler.scale(loss).backward()
+                    else:
                         model_output = model(
                             notes, tokens,
                             src_key_padding_mask=src_key_padding_mask,
@@ -239,50 +249,42 @@ def train_exhaustively(
                         )
                         loss, loss_dict = compute_loss(model_output, tokens, tgt_key_padding_mask)
                         loss = loss / accumulation_steps
-                    scaler.scale(loss).backward()
-                else:
-                    model_output = model(
-                        notes, tokens,
-                        src_key_padding_mask=src_key_padding_mask,
-                        tgt_mask=tgt_mask,
-                        tgt_key_padding_mask=tgt_key_padding_mask
-                    )
-                    loss, loss_dict = compute_loss(model_output, tokens, tgt_key_padding_mask)
-                    loss = loss / accumulation_steps
-                    loss.backward()
+                        loss.backward()
 
-                window_loss += loss_dict['total']
-                accumulation_counter += 1
+                    window_loss += loss_dict['total']
+                    accumulation_counter += 1
 
-                if accumulation_counter % accumulation_steps == 0:
-                    current_lr = get_lr(step_count)
-                    for param_group in optimizer.param_groups:
-                        param_group['lr'] = current_lr
+                    if accumulation_counter % accumulation_steps == 0:
+                        current_lr = get_lr(step_count)
+                        for param_group in optimizer.param_groups:
+                            param_group['lr'] = current_lr
 
-                    if scaler:
-                        scaler.unscale_(optimizer)
-                        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-                        scaler.step(optimizer)
-                        scaler.update()
-                    else:
-                        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-                        optimizer.step()
-                    optimizer.zero_grad()
+                        if scaler:
+                            scaler.unscale_(optimizer)
+                            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+                            scaler.step(optimizer)
+                            scaler.update()
+                        else:
+                            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+                            optimizer.step()
+                        optimizer.zero_grad()
 
-                    step_count += 1
-                    chunk_steps += 1
+                        step_count += 1
+                        chunk_steps += 1
 
-                    if step_count % print_every == 0:
-                        avg_window_loss = window_loss / (print_every * accumulation_steps)
-                        print(f"Step {step_count}/{total_steps}, Loss: {avg_window_loss:.4f}")
-                        window_loss = 0.0
+                        if step_count % print_every == 0:
+                            avg_window_loss = window_loss / (print_every * accumulation_steps)
+                            print(f"Step {step_count}/{total_steps}, Loss: {avg_window_loss:.4f}")
+                            window_loss = 0.0
 
-                    if chunk_steps >= num_steps:
-                        break
+                        if chunk_steps >= num_steps:
+                            break
 
-            del chunk_dataset
-            torch.cuda.empty_cache() if torch.cuda.is_available() else None
-            chunk_idx += 1
+                del chunk_dataset
+                torch.cuda.empty_cache() if torch.cuda.is_available() else None
+                chunk_idx += 1
+
+            rotation += 1
 
     else:
         dataloader = DataLoader(
@@ -291,9 +293,7 @@ def train_exhaustively(
             shuffle=True,
             collate_fn=collate_fn,
             num_workers=num_workers,
-            pin_memory=True,
-            prefetch_factor=4,
-            persistent_workers=True
+            pin_memory=True
         )
 
         while step_count < total_steps:

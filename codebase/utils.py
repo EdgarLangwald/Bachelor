@@ -129,6 +129,102 @@ def plot_list(
     return fig
 
 
+def visualize_teacher_forcing(model, dataset, device=None, title: str = "Teacher Forcing Visualization"):
+    from .inference import tokens_to_segs
+    from .data import SegmentToken
+    from .preprocessing import segment
+    import torch
+
+    notes, tokens = dataset()
+
+    if device is None:
+        device = next(model.parameters()).device
+    else:
+        device = torch.device(device) if isinstance(device, str) else device
+
+    model.eval()
+    notes_tensor = torch.tensor(
+        [[[note.start, note.duration, note.pitch, note.velocity] for note in notes]],
+        dtype=torch.float32
+    ).to(device)
+    tokens_tensor = torch.tensor(
+        [[[t.height, t.amount, t.time] for t in tokens]],
+        dtype=torch.float32
+    ).to(device)
+
+    tgt_len = len(tokens)
+    tgt_mask = torch.triu(torch.ones(tgt_len, tgt_len, device=device), diagonal=1).bool()
+
+    with torch.no_grad():
+        model_output = model(notes_tensor, tokens_tensor, tgt_mask=tgt_mask)
+
+    ground_truth_segs = tokens_to_segs(tokens)
+    gt_times, gt_values = segs_to_curve(ground_truth_segs)
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatter(
+        x=gt_times,
+        y=gt_values,
+        mode='lines',
+        name='Ground Truth',
+        line=dict(color='lightblue', width=2)
+    ))
+
+    for i in range(1, tgt_len - 1):
+        height = model_output['height'][0, i, 0].item()
+        amount = model_output['amount'][0, i, 0].item()
+        log_time_delta = model_output['time'][0, i, 0]
+        time_delta = torch.exp(log_time_delta).item()
+        pred_time = tokens[i].time + time_delta
+
+        gt_token = tokens[i]
+
+        fig.add_trace(go.Scatter(
+            x=[gt_token.time],
+            y=[gt_token.height],
+            mode='markers',
+            name='GT Token',
+            marker=dict(size=8, color='blue'),
+            showlegend=(i == 1),
+            hoverinfo='skip'
+        ))
+
+        fig.add_trace(go.Scatter(
+            x=[pred_time],
+            y=[height],
+            mode='markers',
+            name='Generated Token',
+            marker=dict(size=8, color='yellow'),
+            showlegend=(i == 1),
+            hoverinfo='skip'
+        ))
+
+        seg = segment(gt_token.time, gt_token.height, pred_time, height, amount)
+        seg_times = np.linspace(seg.x_start, seg.x_end, 50)
+        seg_values = [seg(t) for t in seg_times]
+
+        fig.add_trace(go.Scatter(
+            x=seg_times,
+            y=seg_values,
+            mode='lines',
+            name='Predicted Segment',
+            line=dict(color='red', width=1.5),
+            showlegend=(i == 1),
+            hoverinfo='skip'
+        ))
+
+    fig.update_xaxes(rangeslider_visible=True)
+    fig.update_layout(
+        title=title,
+        xaxis_title="Time (s)",
+        yaxis_title="Pedal Value",
+        hovermode='x unified'
+    )
+
+    return fig
+
+
 def visualize_model(model, dataset, num_plots: int, device: str = 'cpu', exclude_context: bool = False, show_notes: bool = True, generate: bool = True):
     from .inference import generate as generate_fn, tokens_to_segs
     from .data import Note
@@ -153,7 +249,7 @@ def visualize_model(model, dataset, num_plots: int, device: str = 'cpu', exclude
         row = i // cols + 1
         col = i % cols + 1
 
-        notes, tokens = dataset[0]
+        notes, tokens = dataset()
 
         if exclude_context:
             notes = [Note(start=(10/88)*i, duration=10/88, pitch=i, velocity=1) for i in range(88)]

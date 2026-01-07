@@ -32,9 +32,12 @@ Project Path: `C:\Users\edgar\Documents\Studium\Mathe\Bachelor\Code`
 
 - saves (folder)
 - ML_With_Torch_venv (folder) - 
-**IMPORTANT**: always execute code from this venv
 - main_codebase.ipynb and main_midiBERT.ipynb- where user runs and tests code from
 - main.py - For Claude Code to use to run and debug main code. Always keep it very minimal so user quickly sees what Claude is testing
+
+# How to run code
+cd "C:/Users/edgar/Documents/Studium/Mathe/Bachelor/Code" && ML_With_Torch_venv/Scripts/python.exe example_script.py
+**IMPORTANT: ALWAYS EXECUTE CODE FROM THIS VIRTUAL ENVIRONMENT**
 
 # Development Guidelines
 
