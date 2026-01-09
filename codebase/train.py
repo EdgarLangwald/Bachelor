@@ -5,64 +5,14 @@ from .data import SegmentToken
 from .utils import TorchSegment
 
 
-def _segment_loss_single(x_start, y_start, x_end_pred, y_end_pred, amount_pred, x_end_gt, y_end_gt, amount_gt):
-    seg_pred = TorchSegment(x_start, y_start, x_end_pred, y_end_pred, amount_pred)
-    seg_gt = TorchSegment(x_start, y_start, x_end_gt, y_end_gt, amount_gt)
-
-    x_min_end = torch.min(x_end_pred, x_end_gt)
-    x_max_end = torch.max(x_end_pred, x_end_gt)
-
-    h = 1.0
-    L = x_min_end - x_start
-    n = (L / h).int()
-
-    L_overlap = torch.tensor(0.0, device=x_start.device)
-
-    if L < h:
-        n = torch.tensor(0, device=x_start.device)
-
-    for i in range(n.item()):
-        a = x_start + i * h
-        b = x_start + (i + 1) * h
-        x0 = a
-        x1 = (a + b) / 2
-        x2 = b
-
-        f0 = (seg_pred(x0) - seg_gt(x0))**2
-        f1 = (seg_pred(x1) - seg_gt(x1))**2
-        f2 = (seg_pred(x2) - seg_gt(x2))**2
-
-        L_overlap = L_overlap + (b - a) / 6 * (f0 + 4*f1 + f2)
-
-    remainder = L - h * n
-    if remainder > 1e-6 or n == 0:
-        a = x_start + n * h
-        b = x_min_end
-        x0 = a
-        x1 = (a + b) / 2
-        x2 = b
-
-        f0 = (seg_pred(x0) - seg_gt(x0))**2
-        f1 = (seg_pred(x1) - seg_gt(x1))**2
-        f2 = (seg_pred(x2) - seg_gt(x2))**2
-
-        L_overlap = L_overlap + (b - a) / 6 * (f0 + 4*f1 + f2)
-
-    L_mismatch = torch.abs(x_max_end - x_min_end)
-    L_normalized = (L_overlap + L_mismatch) / torch.clamp(x_end_gt - x_start, min=1e-6)
-
-    return L_normalized
-
-
 def compute_segment_loss(
     model_output: Dict[str, torch.Tensor],
     tokens: torch.Tensor,
     tgt_key_padding_mask: torch.Tensor,
 ) -> torch.Tensor:
-
-    epsilon = 1e-6
     batch_size, seq_len = tokens.shape[0], tokens.shape[1]
     h = 1.0
+    device = tokens.device
 
     pred_heights = model_output['height'][:, :-1, 0]
     pred_amounts = model_output['amount'][:, :-1, 0]
@@ -79,35 +29,130 @@ def compute_segment_loss(
 
     mask = ~tgt_key_padding_mask[:, 1:]
 
-    segment_loss = torch.tensor(0.0, device=tokens.device)
-    num_valid_segments = 0
-
+    valid_indices = []
     for b in range(batch_size):
         for t in range(1, seq_len - 1):
-            if not mask[b, t]:
-                continue
+            if mask[b, t]:
+                valid_indices.append((b, t))
 
-            x_start = prev_times[b, t]
-            y_start = prev_heights[b, t]
-            x_end_pred = pred_times[b, t]
-            y_end_pred = pred_heights[b, t]
-            amount_pred = pred_amounts[b, t]
-            x_end_gt = target_times[b, t]
-            y_end_gt = target_heights[b, t]
-            amount_gt = target_amounts[b, t]
+    if not valid_indices:
+        return torch.tensor(0.0, device=device)
 
-            seg_loss = _segment_loss_single(
-                x_start, y_start,
-                x_end_pred, y_end_pred, amount_pred,
-                x_end_gt, y_end_gt, amount_gt
-            )
+    num_valid = len(valid_indices)
+    batch_indices = torch.tensor([idx[0] for idx in valid_indices], device=device)
+    time_indices = torch.tensor([idx[1] for idx in valid_indices], device=device)
 
-            segment_loss = segment_loss + seg_loss
-            num_valid_segments += 1
+    x_starts = prev_times[batch_indices, time_indices]
+    y_starts = prev_heights[batch_indices, time_indices]
+    x_ends_pred = pred_times[batch_indices, time_indices]
+    y_ends_pred = pred_heights[batch_indices, time_indices]
+    amounts_pred = pred_amounts[batch_indices, time_indices]
+    x_ends_gt = target_times[batch_indices, time_indices]
+    y_ends_gt = target_heights[batch_indices, time_indices]
+    amounts_gt = target_amounts[batch_indices, time_indices]
 
-    segment_loss = segment_loss / max(num_valid_segments, 1)
+    x_min_ends = torch.min(x_ends_pred, x_ends_gt)
+    x_max_ends = torch.max(x_ends_pred, x_ends_gt)
 
-    return segment_loss
+    L_vals = x_min_ends - x_starts
+    n_vals = (L_vals / h).int()
+    max_n = n_vals.max().item()
+
+    max_points = 2 * max_n + 3
+    eval_matrix = torch.full((num_valid, max_points), 100.0, device=device)
+
+    for seg_idx in range(num_valid):
+        x_start = x_starts[seg_idx]
+        x_min_end = x_min_ends[seg_idx]
+        n = n_vals[seg_idx].item()
+        L = L_vals[seg_idx]
+
+        point_idx = 0
+        eval_matrix[seg_idx, point_idx] = x_start
+        point_idx += 1
+
+        for i in range(n):
+            a = x_start + i * h
+            b = x_start + (i + 1) * h
+            eval_matrix[seg_idx, point_idx] = (a + b) / 2
+            point_idx += 1
+            eval_matrix[seg_idx, point_idx] = b
+            point_idx += 1
+
+        remainder = L - h * n
+        if remainder > 1e-6 or n == 0:
+            a = x_start + n * h
+            b = x_min_end
+            eval_matrix[seg_idx, point_idx] = (a + b) / 2
+            point_idx += 1
+            eval_matrix[seg_idx, point_idx] = b
+
+    x_starts_exp = x_starts.unsqueeze(1).expand(-1, max_points)
+    y_starts_exp = y_starts.unsqueeze(1).expand(-1, max_points)
+    x_ends_pred_exp = x_ends_pred.unsqueeze(1).expand(-1, max_points)
+    y_ends_pred_exp = y_ends_pred.unsqueeze(1).expand(-1, max_points)
+    amounts_pred_exp = amounts_pred.unsqueeze(1).expand(-1, max_points)
+    x_ends_gt_exp = x_ends_gt.unsqueeze(1).expand(-1, max_points)
+    y_ends_gt_exp = y_ends_gt.unsqueeze(1).expand(-1, max_points)
+    amounts_gt_exp = amounts_gt.unsqueeze(1).expand(-1, max_points)
+
+    seg_pred = TorchSegment(x_starts_exp, y_starts_exp, x_ends_pred_exp, y_ends_pred_exp, amounts_pred_exp)
+    seg_gt = TorchSegment(x_starts_exp, y_starts_exp, x_ends_gt_exp, y_ends_gt_exp, amounts_gt_exp)
+
+    values_pred = seg_pred(eval_matrix)
+    values_gt = seg_gt(eval_matrix)
+    sq_diff = (values_pred - values_gt) ** 2
+
+    segment_losses = torch.zeros(num_valid, device=device)
+
+    for seg_idx in range(num_valid):
+        n = n_vals[seg_idx].item()
+        L = L_vals[seg_idx]
+
+        point_idx = 0
+        loss_overlap = torch.tensor(0.0, device=device)
+
+        for i in range(n):
+            a = x_starts[seg_idx] + i * h
+            b = x_starts[seg_idx] + (i + 1) * h
+
+            if i == 0:
+                f0 = sq_diff[seg_idx, point_idx]
+                point_idx += 1
+            else:
+                f0 = f2_prev
+
+            f1 = sq_diff[seg_idx, point_idx]
+            point_idx += 1
+            f2 = sq_diff[seg_idx, point_idx]
+            point_idx += 1
+            f2_prev = f2
+
+            loss_overlap = loss_overlap + (b - a) / 6 * (f0 + 4*f1 + f2)
+
+        remainder = L - h * n
+        if remainder > 1e-6 or n == 0:
+            a = x_starts[seg_idx] + n * h
+            b = x_min_ends[seg_idx]
+
+            if n == 0:
+                f0 = sq_diff[seg_idx, 0]
+                point_idx = 1
+            else:
+                f0 = f2_prev
+
+            f1 = sq_diff[seg_idx, point_idx]
+            point_idx += 1
+            f2 = sq_diff[seg_idx, point_idx]
+
+            loss_overlap = loss_overlap + (b - a) / 6 * (f0 + 4*f1 + f2)
+
+        loss_mismatch = torch.abs(x_max_ends[seg_idx] - x_min_ends[seg_idx])
+        loss_normalized = (loss_overlap + loss_mismatch) / torch.clamp(x_ends_gt[seg_idx] - x_starts[seg_idx], min=1e-6)
+
+        segment_losses[seg_idx] = loss_normalized
+
+    return segment_losses.mean()
 
 
 def compute_param_loss(
@@ -168,7 +213,7 @@ def step(model, batch, optimizer, device, alpha=0.5):
         tgt_key_padding_mask=tgt_key_padding_mask
     )
 
-    segment_loss = compute_batch_segment_loss(model_output, tokens, tgt_key_padding_mask)
+    segment_loss = compute_segment_loss(model_output, tokens, tgt_key_padding_mask)
     param_loss, param_loss_dict = compute_param_loss(model_output, tokens, tgt_key_padding_mask)
 
     total_loss = alpha * segment_loss + (1 - alpha) * param_loss
@@ -363,7 +408,7 @@ def train_exhaustively(
                                 tgt_mask=tgt_mask,
                                 tgt_key_padding_mask=tgt_key_padding_mask
                             )
-                            segment_loss = compute_batch_segment_loss(model_output, tokens, tgt_key_padding_mask)
+                            segment_loss = compute_segment_loss(model_output, tokens, tgt_key_padding_mask)
                             param_loss, param_loss_dict = compute_param_loss(model_output, tokens, tgt_key_padding_mask)
                             loss = alpha * segment_loss + (1 - alpha) * param_loss
                             loss_dict = {
@@ -380,7 +425,7 @@ def train_exhaustively(
                             tgt_mask=tgt_mask,
                             tgt_key_padding_mask=tgt_key_padding_mask
                         )
-                        segment_loss = compute_batch_segment_loss(model_output, tokens, tgt_key_padding_mask)
+                        segment_loss = compute_segment_loss(model_output, tokens, tgt_key_padding_mask)
                         param_loss, param_loss_dict = compute_param_loss(model_output, tokens, tgt_key_padding_mask)
                         loss = alpha * segment_loss + (1 - alpha) * param_loss
                         loss_dict = {
@@ -461,7 +506,7 @@ def train_exhaustively(
                             tgt_mask=tgt_mask,
                             tgt_key_padding_mask=tgt_key_padding_mask
                         )
-                        segment_loss = compute_batch_segment_loss(model_output, tokens, tgt_key_padding_mask)
+                        segment_loss = compute_segment_loss(model_output, tokens, tgt_key_padding_mask)
                         param_loss, param_loss_dict = compute_param_loss(model_output, tokens, tgt_key_padding_mask)
                         loss = alpha * segment_loss + (1 - alpha) * param_loss
                         loss_dict = {
@@ -478,7 +523,7 @@ def train_exhaustively(
                         tgt_mask=tgt_mask,
                         tgt_key_padding_mask=tgt_key_padding_mask
                     )
-                    segment_loss = compute_batch_segment_loss(model_output, tokens, tgt_key_padding_mask)
+                    segment_loss = compute_segment_loss(model_output, tokens, tgt_key_padding_mask)
                     param_loss, param_loss_dict = compute_param_loss(model_output, tokens, tgt_key_padding_mask)
                     loss = alpha * segment_loss + (1 - alpha) * param_loss
                     loss_dict = {

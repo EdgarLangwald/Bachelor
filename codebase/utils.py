@@ -357,4 +357,6 @@ class TorchSegment:
         return self.y_start + x * (self.y_end - self.y_start)
 
     def __call__(self, x):
-        return self.scale(self.Single(self.norm(x)))
+        mask = (x != 100.0)
+        result = torch.where(mask, self.scale(self.Single(self.norm(x))), torch.tensor(0.0, device=x.device))
+        return result

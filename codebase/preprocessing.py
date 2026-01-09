@@ -66,20 +66,46 @@ class segment:
     def __call__(self, x):
         return self.scale(self.Single(self.norm(x)))
 
-    def Lp_distance_on_const(self, const, p, a, b):
+    def Lp_distance_on_const(self, const, p, a, b, h=0.5):
         assert self.x_start <= a <= b <= self.x_end, "integration out of bounds"
 
-        if (b-a) < 0.1:
-            x0, x1, x2 = a, (a+b)/2, b
-            f0 = abs(self(x0) - const)**p
-            f1 = abs(self(x1) - const)**p
-            f2 = abs(self(x2) - const)**p
+        if (b - a) < h:
+            f0 = abs(self(a) - const)**p
+            f1 = abs(self((a+b)/2) - const)**p
+            f2 = abs(self(b) - const)**p
             return (b - a) / 6 * (f0 + 4*f1 + f2)
-        else:
-            x_axis = np.linspace(a, b, int(100 * (b-a)))
-            y_axis = np.array([self(x) for x in x_axis])
-            approx = (y_axis - const)**p
-            return approx.sum() * (b-a)
+
+        L = b - a
+        n = int(L / h)
+        total = 0.0
+
+        f2_prev = abs(self(a) - const)**p
+
+        for i in range(n):
+            x_a = a + i * h
+            x_mid = a + (i + 0.5) * h
+            x_b = a + (i + 1) * h
+
+            f0 = f2_prev
+            f1 = abs(self(x_mid) - const)**p
+            f2 = abs(self(x_b) - const)**p
+            f2_prev = f2
+
+            total += h / 6 * (f0 + 4*f1 + f2)
+
+        remainder = L - n * h
+        if remainder > 1e-6:
+            x_a = a + n * h
+            x_mid = x_a + remainder / 2
+            x_b = b
+
+            f0 = f2_prev
+            f1 = abs(self(x_mid) - const)**p
+            f2 = abs(self(x_b) - const)**p
+
+            total += remainder / 6 * (f0 + 4*f1 + f2)
+
+        return total
 
 
 def pedals_to_segs(pedal_events: List[PedalEvent], epsilon: float = 0.12, p: int = 2) -> List[SegmentEvent]:
@@ -157,7 +183,7 @@ def pedals_to_segs(pedal_events: List[PedalEvent], epsilon: float = 0.12, p: int
 
             time_range = segment_time[-1] - segment_time[0]
             if time_range > 0:
-                dense_time = np.linspace(segment_time[0], segment_time[-1], int(100 * time_range))
+                dense_time = np.linspace(segment_time[0], segment_time[-1], int(20 * time_range))
             else:
                 dense_time = segment_time
 
@@ -165,7 +191,13 @@ def pedals_to_segs(pedal_events: List[PedalEvent], epsilon: float = 0.12, p: int
             idx[idx < 0] = 0
             dense_value = segment_value[idx]
 
-            points = np.column_stack((dense_time, dense_value))
+            combined_time = np.concatenate([dense_time, segment_time])
+            combined_value = np.concatenate([dense_value, segment_value])
+            sort_indices = np.argsort(combined_time)
+            combined_time = combined_time[sort_indices]
+            combined_value = combined_value[sort_indices]
+
+            points = np.column_stack((combined_time, combined_value))
             simplified = rdp(points, epsilon)
             xs, ys = improve_zero_values(simplified[:, 0], simplified[:, 1], segment_time, segment_value)
 
@@ -205,13 +237,13 @@ def pedals_to_segs(pedal_events: List[PedalEvent], epsilon: float = 0.12, p: int
 
     def fit_single_segment(events, times, x_start, y_start, x_end, y_end):
         if np.abs(y_end - y_start) < 0.1:
-            return 1
+            return 0.5
 
         result = minimize_scalar(
             lambda a: objective(a, events, times, x_start, y_start, x_end, y_end),
             bounds=(-0.5, 2.5),
             method='bounded',
-            options={'maxiter': 200}
+            options={'maxiter': 50}
         )
 
         return result.x

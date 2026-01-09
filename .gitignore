@@ -6,6 +6,7 @@
 !CLAUDE.md
 !main.ipynb
 !main.py
+!test_rdp_density.py
 
 # Keep codebase folder and its contents
 !codebase/
