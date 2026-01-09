@@ -1,15 +1,26 @@
 import torch
 from codebase.model import Model
-from codebase.data import Dataset
-from codebase.train import train, train_exhaustively
-from codebase.inference import generate, tokens_to_segs
-from codebase.utils import load_pkl, plot_list, visualize_model, load_chunk_all, visualize_teacher_forcing
-from codebase.preprocessing import create_dataset
+from codebase.train import train
+from codebase.utils import load_chunk_all
 
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
+if __name__ == '__main__':
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    print(f'Using device: {device}')
 
-dataset = load_chunk_all("complete_dataset/chunk_0.pkl")
-model = Model.load('complete_model.pt', device=device)
+    dataset = load_chunk_all("complete_dataset/chunk_0.pkl")
+    print(f"Dataset loaded: {len(dataset)} tracks")
 
-fig = visualize_teacher_forcing(model, dataset)
-fig.show()
+    model = Model(300, 4, 3, 3, 1200, 0.1).to(device)
+    print("Model created")
+
+    train(
+        batch_size=96,
+        lr=0.8e-4,
+        num_steps=200,
+        device=device,
+        model=model,
+        print_every=1,
+        dataset=dataset,
+        model_path="test_model.pt",
+        alpha=0.2
+    )

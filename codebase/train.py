@@ -2,9 +2,115 @@ import torch
 import torch.nn.functional as F
 from typing import Dict, Tuple
 from .data import SegmentToken
+from .utils import TorchSegment
 
 
-def compute_loss(
+def _segment_loss_single(x_start, y_start, x_end_pred, y_end_pred, amount_pred, x_end_gt, y_end_gt, amount_gt):
+    seg_pred = TorchSegment(x_start, y_start, x_end_pred, y_end_pred, amount_pred)
+    seg_gt = TorchSegment(x_start, y_start, x_end_gt, y_end_gt, amount_gt)
+
+    x_min_end = torch.min(x_end_pred, x_end_gt)
+    x_max_end = torch.max(x_end_pred, x_end_gt)
+
+    h = 1.0
+    L = x_min_end - x_start
+    n = (L / h).int()
+
+    L_overlap = torch.tensor(0.0, device=x_start.device)
+
+    if L < h:
+        n = torch.tensor(0, device=x_start.device)
+
+    for i in range(n.item()):
+        a = x_start + i * h
+        b = x_start + (i + 1) * h
+        x0 = a
+        x1 = (a + b) / 2
+        x2 = b
+
+        f0 = (seg_pred(x0) - seg_gt(x0))**2
+        f1 = (seg_pred(x1) - seg_gt(x1))**2
+        f2 = (seg_pred(x2) - seg_gt(x2))**2
+
+        L_overlap = L_overlap + (b - a) / 6 * (f0 + 4*f1 + f2)
+
+    remainder = L - h * n
+    if remainder > 1e-6 or n == 0:
+        a = x_start + n * h
+        b = x_min_end
+        x0 = a
+        x1 = (a + b) / 2
+        x2 = b
+
+        f0 = (seg_pred(x0) - seg_gt(x0))**2
+        f1 = (seg_pred(x1) - seg_gt(x1))**2
+        f2 = (seg_pred(x2) - seg_gt(x2))**2
+
+        L_overlap = L_overlap + (b - a) / 6 * (f0 + 4*f1 + f2)
+
+    L_mismatch = torch.abs(x_max_end - x_min_end)
+    L_normalized = (L_overlap + L_mismatch) / torch.clamp(x_end_gt - x_start, min=1e-6)
+
+    return L_normalized
+
+
+def compute_segment_loss(
+    model_output: Dict[str, torch.Tensor],
+    tokens: torch.Tensor,
+    tgt_key_padding_mask: torch.Tensor,
+) -> torch.Tensor:
+
+    epsilon = 1e-6
+    batch_size, seq_len = tokens.shape[0], tokens.shape[1]
+    h = 1.0
+
+    pred_heights = model_output['height'][:, :-1, 0]
+    pred_amounts = model_output['amount'][:, :-1, 0]
+    pred_log_delta_times = torch.clamp(model_output['time'][:, :-1, 0], min=-10, max=10)
+    pred_delta_times = torch.exp(pred_log_delta_times)
+    pred_times = tokens[:, :-1, 2] + pred_delta_times
+
+    target_times = tokens[:, 1:, 2]
+    target_heights = tokens[:, 1:, 0]
+    target_amounts = tokens[:, 1:, 1]
+
+    prev_times = tokens[:, :-1, 2]
+    prev_heights = tokens[:, :-1, 0]
+
+    mask = ~tgt_key_padding_mask[:, 1:]
+
+    segment_loss = torch.tensor(0.0, device=tokens.device)
+    num_valid_segments = 0
+
+    for b in range(batch_size):
+        for t in range(1, seq_len - 1):
+            if not mask[b, t]:
+                continue
+
+            x_start = prev_times[b, t]
+            y_start = prev_heights[b, t]
+            x_end_pred = pred_times[b, t]
+            y_end_pred = pred_heights[b, t]
+            amount_pred = pred_amounts[b, t]
+            x_end_gt = target_times[b, t]
+            y_end_gt = target_heights[b, t]
+            amount_gt = target_amounts[b, t]
+
+            seg_loss = _segment_loss_single(
+                x_start, y_start,
+                x_end_pred, y_end_pred, amount_pred,
+                x_end_gt, y_end_gt, amount_gt
+            )
+
+            segment_loss = segment_loss + seg_loss
+            num_valid_segments += 1
+
+    segment_loss = segment_loss / max(num_valid_segments, 1)
+
+    return segment_loss
+
+
+def compute_param_loss(
     model_output: Dict[str, torch.Tensor],
     tokens: torch.Tensor,
     tgt_key_padding_mask: torch.Tensor,
@@ -14,11 +120,12 @@ def compute_loss(
 
     pred_heights = model_output['height'][:, :-1, 0]
     pred_amounts = model_output['amount'][:, :-1, 0]
-    pred_log_delta_times = model_output['time'][:, :-1, 0]
+    pred_log_delta_times = torch.clamp(model_output['time'][:, :-1, 0], min=-10, max=10)
 
+    target_times = tokens[:, 1:, 2]
     target_heights = tokens[:, 1:, 0]
     target_amounts = tokens[:, 1:, 1]
-    target_times = tokens[:, 1:, 2]
+
     prev_times = tokens[:, :-1, 2]
     target_delta_times = torch.clamp(target_times - prev_times, min=epsilon)
     target_log_delta_times = torch.log(target_delta_times)
@@ -29,19 +136,20 @@ def compute_loss(
     amount_loss = F.mse_loss(pred_amounts[mask], target_amounts[mask])
     time_loss = F.mse_loss(pred_log_delta_times[mask], target_log_delta_times[mask])
 
-    total_loss = 1 * height_loss + 0.2 * amount_loss + 1 * time_loss
+    param_loss = 2.0 * height_loss + 1 * amount_loss + 0.5 * time_loss
+    param_loss = 1.5 * param_loss
 
     loss_dict = {
-        'total': total_loss.item(),
+        'param': param_loss.item(),
         'height': height_loss.item(),
         'amount': amount_loss.item(),
         'time': time_loss.item()
     }
 
-    return total_loss, loss_dict
+    return param_loss, loss_dict
 
 
-def step(model, batch, optimizer, device):
+def step(model, batch, optimizer, device, alpha=0.5):
     model.train()
     optimizer.zero_grad()
 
@@ -60,15 +168,25 @@ def step(model, batch, optimizer, device):
         tgt_key_padding_mask=tgt_key_padding_mask
     )
 
-    loss, loss_dict = compute_loss(model_output, tokens, tgt_key_padding_mask)
+    segment_loss = compute_batch_segment_loss(model_output, tokens, tgt_key_padding_mask)
+    param_loss, param_loss_dict = compute_param_loss(model_output, tokens, tgt_key_padding_mask)
 
-    loss.backward()
+    total_loss = alpha * segment_loss + (1 - alpha) * param_loss
+
+    loss_dict = {
+        'total': total_loss.item(),
+        'segment': segment_loss.item(),
+        **param_loss_dict
+    }
+
+    total_loss.backward()
+    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
     optimizer.step()
 
-    return loss_dict['total']
+    return loss_dict
 
 
-def train(batch_size, lr, num_steps, device, model=None, print_every=100, dataset=None, model_path=None, dataset_path=None):
+def train(batch_size, lr, num_steps, device, model=None, print_every=100, dataset=None, model_path=None, dataset_path=None, alpha=0.5):
     from .utils import load_pkl
     from torch.utils.data import DataLoader
     from .data import collate_fn
@@ -95,32 +213,36 @@ def train(batch_size, lr, num_steps, device, model=None, print_every=100, datase
     import multiprocessing
     multiprocessing.set_start_method('spawn', force=True)
 
+    print("Creating dataloader...")
     dataloader = DataLoader(
         dataset,
         batch_size=batch_size,
         shuffle=True,
         collate_fn=collate_fn,
-        num_workers=4,
-        pin_memory=True,
-        prefetch_factor=3,
-        persistent_workers=True
     )
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
-    window_loss = 0.0
+    window_losses = {'total': 0.0, 'segment': 0.0, 'param': 0.0, 'height': 0.0, 'amount': 0.0, 'time': 0.0}
     step_count = 0
 
+    print("Starting training loop...")
     while step_count < num_steps:
         for batch in dataloader:
 
-            loss = step(model, batch, optimizer, device)
-            window_loss += loss
+            loss_dict = step(model, batch, optimizer, device, alpha=alpha)
+            for key in window_losses:
+                window_losses[key] += loss_dict[key]
             step_count += 1
 
             if step_count % print_every == 0:
-                avg_window_loss = window_loss / print_every
-                print(f"Step {step_count}/{num_steps}, Avg Loss: {avg_window_loss:.4f}")
-                window_loss = 0.0
+                print(f"Step {step_count}/{num_steps}")
+                print(f"  Total: {window_losses['total']/print_every:.4f} | Segment: {window_losses['segment']/print_every:.4f} | Param: {window_losses['param']/print_every:.4f}")
+                print(f"  Height: {window_losses['height']/print_every:.4f} | Amount: {window_losses['amount']/print_every:.4f} | Time: {window_losses['time']/print_every:.4f}")
+                for key in window_losses:
+                    window_losses[key] = 0.0
+
+            if step_count >= num_steps:
+                break
 
     print(f"Saving model to {model_path}")
     model.save(model_path)
@@ -138,7 +260,8 @@ def train_exhaustively(
     dataset_path="dataset",
     print_every=100,
     accumulation_steps=4,
-    num_rotations=1
+    num_rotations=1,
+    alpha=0.5
 ):
     from .utils import load_pkl, load_chunk_all
     from torch.utils.data import DataLoader
@@ -191,7 +314,7 @@ def train_exhaustively(
         progress = (step - warmup_steps) / (total_steps - warmup_steps)
         return min_lr + (lr - min_lr) * 0.5 * (1 + math.cos(math.pi * progress))
 
-    window_loss = 0.0
+    window_losses = {'total': 0.0, 'segment': 0.0, 'param': 0.0, 'height': 0.0, 'amount': 0.0, 'time': 0.0}
     step_count = 0
     accumulation_counter = 0
     optimizer.zero_grad()
@@ -207,7 +330,9 @@ def train_exhaustively(
             chunk_idx = 0
 
             while chunk_idx < len(chunk_paths):
+                print(f"Loading chunk {chunk_idx+1}/{len(chunk_paths)}...")
                 chunk_dataset = load_chunk_all(str(chunk_paths[chunk_idx].relative_to(Path("saves"))))
+                print(f"Creating dataloader for chunk {chunk_idx+1}...")
                 dataloader = DataLoader(
                     chunk_dataset,
                     batch_size=batch_size,
@@ -217,6 +342,7 @@ def train_exhaustively(
                     pin_memory=True
                 )
 
+                print(f"Starting training on chunk {chunk_idx+1}...")
                 chunk_steps = 0
                 for batch in dataloader:
                     model.train()
@@ -237,7 +363,14 @@ def train_exhaustively(
                                 tgt_mask=tgt_mask,
                                 tgt_key_padding_mask=tgt_key_padding_mask
                             )
-                            loss, loss_dict = compute_loss(model_output, tokens, tgt_key_padding_mask)
+                            segment_loss = compute_batch_segment_loss(model_output, tokens, tgt_key_padding_mask)
+                            param_loss, param_loss_dict = compute_param_loss(model_output, tokens, tgt_key_padding_mask)
+                            loss = alpha * segment_loss + (1 - alpha) * param_loss
+                            loss_dict = {
+                                'total': loss.item(),
+                                'segment': segment_loss.item(),
+                                **param_loss_dict
+                            }
                             loss = loss / accumulation_steps
                         scaler.scale(loss).backward()
                     else:
@@ -247,11 +380,19 @@ def train_exhaustively(
                             tgt_mask=tgt_mask,
                             tgt_key_padding_mask=tgt_key_padding_mask
                         )
-                        loss, loss_dict = compute_loss(model_output, tokens, tgt_key_padding_mask)
+                        segment_loss = compute_batch_segment_loss(model_output, tokens, tgt_key_padding_mask)
+                        param_loss, param_loss_dict = compute_param_loss(model_output, tokens, tgt_key_padding_mask)
+                        loss = alpha * segment_loss + (1 - alpha) * param_loss
+                        loss_dict = {
+                            'total': loss.item(),
+                            'segment': segment_loss.item(),
+                            **param_loss_dict
+                        }
                         loss = loss / accumulation_steps
                         loss.backward()
 
-                    window_loss += loss_dict['total']
+                    for key in window_losses:
+                        window_losses[key] += loss_dict[key]
                     accumulation_counter += 1
 
                     if accumulation_counter % accumulation_steps == 0:
@@ -273,9 +414,11 @@ def train_exhaustively(
                         chunk_steps += 1
 
                         if step_count % print_every == 0:
-                            avg_window_loss = window_loss / (print_every * accumulation_steps)
-                            print(f"Step {step_count}/{total_steps}, Loss: {avg_window_loss:.4f}")
-                            window_loss = 0.0
+                            print(f"Step {step_count}/{total_steps}, LR: {current_lr:.6f}")
+                            print(f"  Total: {window_losses['total']/(print_every*accumulation_steps):.4f} | Segment: {window_losses['segment']/(print_every*accumulation_steps):.4f} | Param: {window_losses['param']/(print_every*accumulation_steps):.4f}")
+                            print(f"  Height: {window_losses['height']/(print_every*accumulation_steps):.4f} | Amount: {window_losses['amount']/(print_every*accumulation_steps):.4f} | Time: {window_losses['time']/(print_every*accumulation_steps):.4f}")
+                            for key in window_losses:
+                                window_losses[key] = 0.0
 
                         if chunk_steps >= num_steps:
                             break
@@ -287,6 +430,7 @@ def train_exhaustively(
             rotation += 1
 
     else:
+        print("Creating dataloader...")
         dataloader = DataLoader(
             dataset,
             batch_size=batch_size,
@@ -296,6 +440,7 @@ def train_exhaustively(
             pin_memory=True
         )
 
+        print("Starting training loop...")
         while step_count < total_steps:
             for batch in dataloader:
                 model.train()
@@ -316,7 +461,14 @@ def train_exhaustively(
                             tgt_mask=tgt_mask,
                             tgt_key_padding_mask=tgt_key_padding_mask
                         )
-                        loss, loss_dict = compute_loss(model_output, tokens, tgt_key_padding_mask)
+                        segment_loss = compute_batch_segment_loss(model_output, tokens, tgt_key_padding_mask)
+                        param_loss, param_loss_dict = compute_param_loss(model_output, tokens, tgt_key_padding_mask)
+                        loss = alpha * segment_loss + (1 - alpha) * param_loss
+                        loss_dict = {
+                            'total': loss.item(),
+                            'segment': segment_loss.item(),
+                            **param_loss_dict
+                        }
                         loss = loss / accumulation_steps
                     scaler.scale(loss).backward()
                 else:
@@ -326,11 +478,19 @@ def train_exhaustively(
                         tgt_mask=tgt_mask,
                         tgt_key_padding_mask=tgt_key_padding_mask
                     )
-                    loss, loss_dict = compute_loss(model_output, tokens, tgt_key_padding_mask)
+                    segment_loss = compute_batch_segment_loss(model_output, tokens, tgt_key_padding_mask)
+                    param_loss, param_loss_dict = compute_param_loss(model_output, tokens, tgt_key_padding_mask)
+                    loss = alpha * segment_loss + (1 - alpha) * param_loss
+                    loss_dict = {
+                        'total': loss.item(),
+                        'segment': segment_loss.item(),
+                        **param_loss_dict
+                    }
                     loss = loss / accumulation_steps
                     loss.backward()
 
-                window_loss += loss_dict['total']
+                for key in window_losses:
+                    window_losses[key] += loss_dict[key]
                 accumulation_counter += 1
 
                 if accumulation_counter % accumulation_steps == 0:
@@ -351,9 +511,11 @@ def train_exhaustively(
                     step_count += 1
 
                     if step_count % print_every == 0:
-                        avg_window_loss = window_loss / (print_every * accumulation_steps)
-                        print(f"Step {step_count}/{total_steps}, Loss: {avg_window_loss:.4f}")
-                        window_loss = 0.0
+                        print(f"Step {step_count}/{total_steps}, LR: {current_lr:.6f}")
+                        print(f"  Total: {window_losses['total']/(print_every*accumulation_steps):.4f} | Segment: {window_losses['segment']/(print_every*accumulation_steps):.4f} | Param: {window_losses['param']/(print_every*accumulation_steps):.4f}")
+                        print(f"  Height: {window_losses['height']/(print_every*accumulation_steps):.4f} | Amount: {window_losses['amount']/(print_every*accumulation_steps):.4f} | Time: {window_losses['time']/(print_every*accumulation_steps):.4f}")
+                        for key in window_losses:
+                            window_losses[key] = 0.0
 
                     if step_count >= total_steps:
                         break

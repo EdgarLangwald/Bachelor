@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import List
 from .data import SegmentEvent, SegmentToken
 import math
+import torch
 
 
 def save_pkl(data, filepath: str):
@@ -327,3 +328,33 @@ def visualize_model(model, dataset, num_plots: int, device: str = 'cpu', exclude
     )
 
     return fig
+
+
+class TorchSegment:
+    def __init__(self, x_start, y_start, x_end, y_end, amount):
+        self.x_start = x_start
+        self.y_start = y_start
+        self.x_end = x_end
+        self.y_end = y_end
+        self.amount = torch.clamp(amount, 0, 2) * 3 - 0.5
+
+    def a(self, x):
+        return torch.clamp(x**3, min=0.1, max=10)
+
+    def S1(self, x):
+        return (x + 1e-8)**self.a(self.amount)
+
+    def S2(self, x):
+        return 1 - (1-x + 1e-8)**self.a(2-self.amount)
+
+    def Single(self, x):
+        return torch.where(self.amount > 1, self.S1(x), self.S2(x))
+
+    def norm(self, x):
+        return torch.clamp((x - self.x_start) / torch.clamp(self.x_end - self.x_start, min=1e-6), 0, 1)
+
+    def scale(self, x):
+        return self.y_start + x * (self.y_end - self.y_start)
+
+    def __call__(self, x):
+        return self.scale(self.Single(self.norm(x)))
