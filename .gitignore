@@ -7,6 +7,7 @@
 !main.ipynb
 !main.py
 !test_rdp_density.py
+!test_segment_loss.py
 
 # Keep codebase folder and its contents
 !codebase/

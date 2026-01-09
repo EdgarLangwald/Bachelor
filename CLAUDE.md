@@ -30,7 +30,7 @@ Project Path: `C:\Users\edgar\Documents\Studium\Mathe\Bachelor\Code`
     - Notizen.txt - For User. Todo's.
     - Prompt.txt - Original prompt to create this project
 
-- saves (folder)
+- saves (folder) - all save and loading functions should append "saves/" to their path by default
 - ML_With_Torch_venv (folder) - 
 - main_codebase.ipynb and main_midiBERT.ipynb- where user runs and tests code from
 - main.py - For Claude Code to use to run and debug main code. Always keep it very minimal so user quickly sees what Claude is testing
@@ -41,13 +41,19 @@ cd "C:/Users/edgar/Documents/Studium/Mathe/Bachelor/Code" && ML_With_Torch_venv/
 
 # Development Guidelines
 
-- **ADHERE TO THESE GUIDELINES**
+## Git usage
 - You are **STRICTLY FORBITTEN** to run git checkout <file_name>, git reset and git restore - all commands that can potentially delete progress.
-- Don't failproof the code. ALWAYS ASSUME THE CODE DOES EXACTLY WHAT IT'S SUPPOSED TO. If it doesn't, the user wants to know immediately when and where it failed. NO TRY & CATCH BLOCKS or any other safeguards. No checking for empty or short inputs. Asserts are fine. 
-When Debugging:
-- GOAL: KEEP CODE AS SLIM AS POSSIBLE. this means:
+
+## Let code fail
+- Don't failproof the code.
+- ALWAYS ASSUME THE CODE DOES EXACTLY WHAT IT'S SUPPOSED TO. If it doesn't, the user wants to know immediately when and where it failed
+- **NO TRY & CATCH BLOCKS** or any other safeguards
+- No checking for empty or short inputs. 
+- **NO CLAMPING** to avoid accidental division by zero
+
+## Debugging
 - Don't create corrected functions with modified names (e.g., `processor_corrected`). Instead, keep original function names and improve the code.
-- Never implement backward compatability
+- **No backward compatability**
 - Always look for code that can be deleted because of changes made
 - Always try to simplify code
 - Add only crucial comments necessary for understanding the code
