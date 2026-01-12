@@ -16,44 +16,20 @@ def save_pkl(data, filepath: str):
         pickle.dump(data, f)
 
 
-def load_pkl(filepath: str):
+def load_dataset(filepath: str):
     from .data import Dataset
 
     load_path = Path("saves") / filepath
+    dataset = Dataset()
 
-    if load_path.is_dir():
-        dataset = Dataset()
-        chunk_files = sorted(load_path.glob("chunk_*.pkl"))
-
-        if not chunk_files:
-            raise FileNotFoundError(f"No chunk files found in {filepath}")
-
-        for chunk_file in chunk_files:
-            for notes, tokens in load_chunk_streaming(str(chunk_file.relative_to("saves"))):
-                dataset.add_tracks(notes, tokens)
-        return dataset
-
-    with open(load_path, 'rb') as f:
-        return pickle.load(f)
-
-
-def load_chunk_streaming(filepath: str):
-    load_path = Path("saves") / filepath
     with open(load_path, 'rb') as f:
         while True:
             try:
-                track_data = pickle.load(f)
-                yield track_data
+                notes, tokens = pickle.load(f)
+                dataset.add_tracks(notes, tokens)
             except EOFError:
                 break
 
-
-def load_chunk_all(filepath: str):
-    from .data import Dataset
-
-    dataset = Dataset()
-    for notes, tokens in load_chunk_streaming(filepath):
-        dataset.add_tracks(notes, tokens)
     return dataset
 
 
@@ -202,7 +178,7 @@ def visualize_teacher_forcing(model, dataset, device=None, title: str = "Teacher
         ))
 
         seg = segment(gt_token.time, gt_token.height, pred_time, height, amount)
-        seg_times = np.linspace(seg.x_start, seg.x_end, 50)
+        seg_times = np.linspace(seg.x_start, seg.x_end, 100)
         seg_values = [seg(t) for t in seg_times]
 
         fig.add_trace(go.Scatter(

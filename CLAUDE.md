@@ -30,7 +30,7 @@ Project Path: `C:\Users\edgar\Documents\Studium\Mathe\Bachelor\Code`
     - Notizen.txt - For User. Todo's.
     - Prompt.txt - Original prompt to create this project
 
-- saves (folder) - all save and loading functions should append "saves/" to their path by default
+- saves (folder)
 - ML_With_Torch_venv (folder) - 
 - main_codebase.ipynb and main_midiBERT.ipynb- where user runs and tests code from
 - main.py - For Claude Code to use to run and debug main code. Always keep it very minimal so user quickly sees what Claude is testing
@@ -58,3 +58,7 @@ cd "C:/Users/edgar/Documents/Studium/Mathe/Bachelor/Code" && ML_With_Torch_venv/
 - Always try to simplify code
 - Add only crucial comments necessary for understanding the code
 - name test scripts test_[what_you_test]
+
+## Project specific rules
+- all save and loading functions append "saves/" to their path by default
+- all dataset files are saved in stream of multiple tuples format

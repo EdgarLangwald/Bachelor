@@ -132,17 +132,58 @@ def pedals_to_segs(pedal_events: List[PedalEvent], epsilon: float = 0.12, p: int
         else:
             return np.array([points[0], points[end]])
 
-    def improve_zero_values(xs, ys, segment_time, segment_value):
+    def prepare_for_rdp(dense_time, dense_value, segment_time, segment_value):
+        non_zero_mask = dense_value != 0
+        dense_time_no_zeros = dense_time[non_zero_mask]
+        dense_value_no_zeros = dense_value[non_zero_mask]
+
+        modified_original_time = list(segment_time)
+        modified_original_value = list(segment_value)
+
+        for i in range(len(segment_value)):
+            if segment_value[i] == 0:
+                if i + 1 < len(segment_value):
+                    next_time = segment_time[i + 1]
+                    if next_time - segment_time[i] > 0.03:
+                        modified_original_value[i + 1] = 0.0
+
+        combined_time = np.concatenate([dense_time_no_zeros, modified_original_time])
+        combined_value = np.concatenate([dense_value_no_zeros, modified_original_value])
+
+        zero_times = set(segment_time[i] for i in range(len(segment_value)) if segment_value[i] == 0)
+
+        keep_mask = np.ones(len(combined_time), dtype=bool)
+        for i in range(len(combined_time)):
+            for zero_time in zero_times:
+                if abs(combined_time[i] - zero_time) < 0.03 and combined_value[i] != 0:
+                    keep_mask[i] = False
+                    break
+
+        combined_time = combined_time[keep_mask]
+        combined_value = combined_value[keep_mask]
+
+        sort_indices = np.argsort(combined_time)
+        combined_time = combined_time[sort_indices]
+        combined_value = combined_value[sort_indices]
+
+        return combined_time, combined_value
+
+    def improve_zero_values_after_rdp(xs, ys, segment_time, segment_value):
         non_zero_mask = ys != 0
         new_xs = list(xs[non_zero_mask])
         new_ys = list(ys[non_zero_mask])
 
+        existing_times = set(new_xs)
+
         zero_points = []
         for i in range(len(segment_value)):
             if segment_value[i] == 0:
-                zero_points.append((segment_time[i], 0.0))
+                if segment_time[i] not in existing_times:
+                    zero_points.append((segment_time[i], 0.0))
                 if i + 1 < len(segment_value):
-                    zero_points.append((segment_time[i + 1], 0.0))
+                    next_time = segment_time[i + 1]
+                    if next_time - segment_time[i] > 0.03 and next_time not in existing_times:
+                        zero_points.append((next_time, 0.0))
 
         all_points = list(zip(new_xs, new_ys)) + zero_points
         all_points.sort(key=lambda p: p[0])
@@ -191,15 +232,11 @@ def pedals_to_segs(pedal_events: List[PedalEvent], epsilon: float = 0.12, p: int
             idx[idx < 0] = 0
             dense_value = segment_value[idx]
 
-            combined_time = np.concatenate([dense_time, segment_time])
-            combined_value = np.concatenate([dense_value, segment_value])
-            sort_indices = np.argsort(combined_time)
-            combined_time = combined_time[sort_indices]
-            combined_value = combined_value[sort_indices]
+            combined_time, combined_value = prepare_for_rdp(dense_time, dense_value, segment_time, segment_value)
 
             points = np.column_stack((combined_time, combined_value))
             simplified = rdp(points, epsilon)
-            xs, ys = improve_zero_values(simplified[:, 0], simplified[:, 1], segment_time, segment_value)
+            xs, ys = improve_zero_values_after_rdp(simplified[:, 0], simplified[:, 1], segment_time, segment_value)
 
             if start_idx > 0 and len(all_xs) > 0 and len(xs) > 0:
                 if all_xs[-1] == xs[0]:
