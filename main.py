@@ -7,10 +7,13 @@ from codebase.data import collate_fn
 from torch.utils.data import DataLoader
 
 device = torch.device('cuda')
-model = Model.load("test_model.pt", device=device)
-dataset = load_dataset("complete_dataset_fixed/chunk_0.pkl")
+model = Model.load("nocturnes_unnormalized.pt", device=device)
+dataset = load_dataset("nocturnes/chunk_0.pkl")
 
+'''
 fig = visualize_model(model, dataset, 12, "cuda", False, False, True)
 fig.show()
+'''
 
-fig = visualize_teacher_forcing
+fig = visualize_teacher_forcing(model, dataset, device, "Unnormalized model", seed=2)
+fig.show()

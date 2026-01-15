@@ -168,7 +168,7 @@ def pedals_to_segs(pedal_events: List[PedalEvent], epsilon: float = 0.12, p: int
 
         return combined_time, combined_value
 
-    def improve_zero_values_after_rdp(xs, ys, segment_time, segment_value):
+    def improve_zero_values(xs, ys, segment_time, segment_value, threshold=0.03):
         non_zero_mask = ys != 0
         new_xs = list(xs[non_zero_mask])
         new_ys = list(ys[non_zero_mask])
@@ -182,18 +182,29 @@ def pedals_to_segs(pedal_events: List[PedalEvent], epsilon: float = 0.12, p: int
                     zero_points.append((segment_time[i], 0.0))
                 if i + 1 < len(segment_value):
                     next_time = segment_time[i + 1]
-                    if next_time - segment_time[i] > 0.03 and next_time not in existing_times:
+                    if next_time - segment_time[i] > threshold and next_time not in existing_times:
                         zero_points.append((next_time, 0.0))
 
         all_points = list(zip(new_xs, new_ys)) + zero_points
         all_points.sort(key=lambda p: p[0])
 
-        if all_points:
-            new_xs = np.array([p[0] for p in all_points])
-            new_ys = np.array([p[1] for p in all_points])
-        else:
-            new_xs = np.array([])
-            new_ys = np.array([])
+        if not all_points:
+            return np.array([]), np.array([])
+
+        fixed_points = [all_points[0]]
+        for i in range(1, len(all_points)):
+            prev_time = fixed_points[-1][0]
+            curr_time, curr_value = all_points[i]
+
+            dt = curr_time - prev_time
+            if dt < threshold:
+                new_time = prev_time + threshold
+                fixed_points.append((new_time, curr_value))
+            else:
+                fixed_points.append((curr_time, curr_value))
+
+        new_xs = np.array([p[0] for p in fixed_points])
+        new_ys = np.array([p[1] for p in fixed_points])
 
         return new_xs, new_ys
 
@@ -236,7 +247,7 @@ def pedals_to_segs(pedal_events: List[PedalEvent], epsilon: float = 0.12, p: int
 
             points = np.column_stack((combined_time, combined_value))
             simplified = rdp(points, epsilon)
-            xs, ys = improve_zero_values_after_rdp(simplified[:, 0], simplified[:, 1], segment_time, segment_value)
+            xs, ys = improve_zero_values(simplified[:, 0], simplified[:, 1], segment_time, segment_value)
 
             if start_idx > 0 and len(all_xs) > 0 and len(xs) > 0:
                 if all_xs[-1] == xs[0]:

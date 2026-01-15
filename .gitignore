@@ -8,6 +8,7 @@
 !main.py
 !test_rdp_density.py
 !test_segment_loss.py
+!clean_dataset_dt.py
 
 # Keep codebase folder and its contents
 !codebase/

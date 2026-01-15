@@ -106,11 +106,16 @@ def plot_list(
     return fig
 
 
-def visualize_teacher_forcing(model, dataset, device=None, title: str = "Teacher Forcing Visualization"):
+def visualize_teacher_forcing(model, dataset, device=None, title: str = "Teacher Forcing Visualization", seed=None):
     from .inference import tokens_to_segs
     from .data import SegmentToken
     from .preprocessing import segment
     import torch
+    import random
+
+    if seed is not None:
+        random.seed(seed)
+        np.random.seed(seed)
 
     notes, tokens = dataset()
 
@@ -202,9 +207,14 @@ def visualize_teacher_forcing(model, dataset, device=None, title: str = "Teacher
     return fig
 
 
-def visualize_model(model, dataset, num_plots: int, device: str = 'cpu', exclude_context: bool = False, show_notes: bool = True, generate: bool = True):
+def visualize_model(model, dataset, num_plots: int, device: str = 'cpu', exclude_context: bool = False, show_notes: bool = True, generate: bool = True, seed=None):
     from .inference import generate as generate_fn, tokens_to_segs
     from .data import Note
+    import random
+
+    if seed is not None:
+        random.seed(seed)
+        np.random.seed(seed)
 
     max_cols = 7
     if num_plots >= 35:

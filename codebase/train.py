@@ -148,9 +148,12 @@ def compute_segment_loss_original(
             loss_overlap = loss_overlap + (b - a) / 6 * (f0 + 4*f1 + f2)
 
         loss_mismatch = torch.abs(x_max_ends[seg_idx] - x_min_ends[seg_idx])
-        loss_normalized = (loss_overlap + loss_mismatch) / (x_ends_gt[seg_idx] - x_starts[seg_idx])
+        # loss_normalized = (loss_overlap + loss_mismatch) / (x_ends_gt[seg_idx] - x_starts[seg_idx])
 
-        segment_losses[seg_idx] = loss_normalized
+        # segment_losses[seg_idx] = loss_normalized
+        
+        # Trying out what happens if not normalizing the segment loss!
+        segment_losses[seg_idx] = loss_mismatch
 
     return segment_losses.mean()
 
