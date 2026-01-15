@@ -16,6 +16,56 @@ def save_pkl(data, filepath: str):
         pickle.dump(data, f)
 
 
+def plot_loss(filepath: str, detailed: bool = True):
+    load_path = Path("saves") / filepath
+
+    with open(load_path, 'rb') as f:
+        loss_history = pickle.load(f)
+
+    steps = [entry['step'] for entry in loss_history]
+    total_losses = [entry['losses']['total'] for entry in loss_history]
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatter(
+        x=steps,
+        y=total_losses,
+        mode='lines',
+        name='Total Loss',
+        line=dict(color='blue', width=2)
+    ))
+
+    if detailed:
+        segment_losses = [entry['losses']['segment'] for entry in loss_history]
+        param_losses = [entry['losses']['param'] for entry in loss_history]
+
+        fig.add_trace(go.Scatter(
+            x=steps,
+            y=segment_losses,
+            mode='lines',
+            name='Segment Loss',
+            line=dict(color='red', width=2)
+        ))
+
+        fig.add_trace(go.Scatter(
+            x=steps,
+            y=param_losses,
+            mode='lines',
+            name='Param Loss',
+            line=dict(color='green', width=2)
+        ))
+
+    fig.update_layout(
+        title='Training Loss',
+        xaxis_title='Steps',
+        yaxis_title='Loss',
+        hovermode='x unified',
+        legend=dict(yanchor="top", y=0.99, xanchor="right", x=0.99)
+    )
+
+    return fig
+
+
 def load_dataset(filepath: str):
     from .data import Dataset
 

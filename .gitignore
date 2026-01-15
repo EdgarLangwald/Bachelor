@@ -4,7 +4,7 @@
 # But keep these
 !.gitignore
 !CLAUDE.md
-!main.ipynb
+!main_codebase.ipynb
 !main.py
 !test_rdp_density.py
 !test_segment_loss.py
