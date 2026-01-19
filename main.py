@@ -1,19 +1,43 @@
-import time
 import torch
-from codebase.train import compute_segment_loss, compute_param_loss
+from codebase.train import train_exhaustively
 from codebase.model import Model
-from codebase.utils import load_dataset, visualize_model, visualize_teacher_forcing
-from codebase.data import collate_fn
-from torch.utils.data import DataLoader
+from codebase.utils import visualize_model, load_dataset
 
-device = torch.device('cuda')
-model = Model.load("nocturnes_unnormalized.pt", device=device)
-dataset = load_dataset("nocturnes/chunk_0.pkl")
+
+if __name__ == '__main__':
+    device = torch.device('cuda')
+    train_exhaustively(
+        batch_size=50,
+        lr=1e-4,
+        num_steps=30000,
+        device="cuda",
+        model=Model(360, 4, 4, 6, 1480, 0.1),
+        print_every=100,
+        model_path="complete_30k.pt",
+        dataset_path="complete_dataset",
+        accumulation_steps=2,
+        num_rotations=2,
+        num_workers=0,
+        alpha=0.7,
+        add_checkpoints=7000,
+        record_loss=100,
+    )
+
 
 '''
-fig = visualize_model(model, dataset, 12, "cuda", False, False, True)
+model = Model.load("complete_30k.pt", "cuda")
+dataset = load_dataset("complete_dataset/chunk_45.pkl")
+
+fig = visualize_model(
+    model=model,
+    dataset=dataset,
+    num_plots=12,
+    device="cuda",
+    exclude_context=False,
+    show_notes=False,
+    generate=True,
+    seed=None
+    )
+
 fig.show()
 '''
-
-fig = visualize_teacher_forcing(model, dataset, device, "Unnormalized model", seed=2)
-fig.show()

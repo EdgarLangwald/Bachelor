@@ -260,7 +260,8 @@ def train_exhaustively(
     alpha=0.5,
     num_workers=0,
     add_checkpoints=None,
-    record_loss=None
+    record_loss=None,
+    start_training_at=0
 ):
     from .utils import load_dataset
     from torch.utils.data import DataLoader
@@ -269,6 +270,7 @@ def train_exhaustively(
     from pathlib import Path
     import math
     import os
+    import time
 
     min_lr = lr / 100
     weight_decay = 0.01
@@ -281,6 +283,7 @@ def train_exhaustively(
 
     if torch.cuda.is_available():
         torch.backends.cudnn.benchmark = True
+        torch.cuda.synchronize()
         torch.cuda.empty_cache()
 
     if model is None:
@@ -292,12 +295,12 @@ def train_exhaustively(
     chunk_paths = sorted(list(dataset_full_path.glob("chunk_*.pkl")))
     if not chunk_paths:
         raise FileNotFoundError(f"No chunk files found in {dataset_path}")
-    print(f"Found {len(chunk_paths)} chunk files in {dataset_path}")
+    print(f"Found {len(chunk_paths)} chunk files in {dataset_path}", flush=True)
 
     total_steps = num_steps * len(chunk_paths) * num_rotations
-    warmup_steps = total_steps // 20
+    warmup_steps = total_steps // 100
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=min_lr, weight_decay=weight_decay)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=min_lr, weight_decay=weight_decay, eps=1e-5)
     scaler = torch.amp.GradScaler('cuda') if torch.cuda.is_available() else None
 
     def get_lr(step):
@@ -307,25 +310,30 @@ def train_exhaustively(
         return min_lr + (lr - min_lr) * 0.5 * (1 + math.cos(math.pi * progress))
 
     window_losses = {'total': 0.0, 'segment': 0.0, 'param': 0.0}
-    step_count = 0
+    chunks_done = start_training_at - 1 if start_training_at > 0 else 0
+    step_count = chunks_done * num_steps
     accumulation_counter = 0
     optimizer.zero_grad()
 
     loss_history = [] if record_loss is not None else None
+    start_rotation = chunks_done // len(chunk_paths)
+    start_chunk = chunks_done % len(chunk_paths)
 
-    print(f"Training: warmup={warmup_steps}, effective_batch={batch_size}x{accumulation_steps}={effective_batch_size}, workers={num_workers}, rotations={num_rotations}")
-    print(f"Total steps: {num_steps} steps/chunk × {len(chunk_paths)} chunks × {num_rotations} rotations = {total_steps} steps")
-    print(f"Optimizations: mixed_precision={'ON' if scaler else 'OFF'}, cudnn_benchmark=ON")
+    print(f"Training: warmup={warmup_steps}, effective_batch={batch_size}x{accumulation_steps}={effective_batch_size}, workers={num_workers}, rotations={num_rotations}", flush=True)
+    print(f"Total steps: {num_steps} steps/chunk × {len(chunk_paths)} chunks × {num_rotations} rotations = {total_steps} steps", flush=True)
+    if start_training_at > 0:
+        print(f"Resuming at chunk {start_training_at} (rotation {start_rotation+1}, step {chunks_done * num_steps + 1})", flush=True)
+    print(f"Optimizations: mixed_precision={'ON' if scaler else 'OFF'}, cudnn_benchmark=ON", flush=True)
 
-    rotation = 0
+    rotation = start_rotation
 
     while rotation < num_rotations:
-        chunk_idx = 0
+        chunk_idx = start_chunk if rotation == start_rotation else 0
 
         while chunk_idx < len(chunk_paths):
-            print(f"Loading chunk {chunk_idx+1}/{len(chunk_paths)}...")
+            print(f"Loading chunk {chunk_idx+1}/{len(chunk_paths)}...", flush=True)
             chunk_dataset = load_dataset(str(chunk_paths[chunk_idx].relative_to(Path("saves"))))
-            print(f"Creating dataloader for chunk {chunk_idx+1}...")
+            print(f"Creating dataloader for chunk {chunk_idx+1}...", flush=True)
             dataloader = DataLoader(
                 chunk_dataset,
                 batch_size=batch_size,
@@ -333,14 +341,19 @@ def train_exhaustively(
                 collate_fn=collate_fn,
                 num_workers=num_workers,
                 pin_memory=True,
-                persistent_workers=True if num_workers > 0 else False,
-                prefetch_factor=4 if num_workers > 0 else None
             )
 
-            print(f"Starting training on chunk {chunk_idx+1}...")
+            print(f"Starting training on chunk {chunk_idx+1}...", flush=True)
+            window_start = time.time()
+            first_batch = True
             chunk_steps = 0
             while chunk_steps < num_steps:
                 for batch in dataloader:
+                    if first_batch:
+                        load_elapsed = time.time() - window_start
+                        print(f"Data loaded, time: {int(load_elapsed)}s", flush=True)
+                        window_start = time.time()
+                        first_batch = False
                     model.train()
 
                     notes = batch['notes'].to(device)
@@ -412,17 +425,22 @@ def train_exhaustively(
                         if add_checkpoints is not None and step_count % add_checkpoints == 0:
                             checkpoint_path = f"{model_path}_checkpoint_{step_count}.pt"
                             model.save(checkpoint_path)
-                            print(f"Checkpoint saved to {checkpoint_path}")
+                            print(f"Checkpoint saved to {checkpoint_path}", flush=True)
 
                         if record_loss is not None and step_count % record_loss == 0:
                             loss_snapshot = {key: val / (record_loss * accumulation_steps) for key, val in window_losses.items()}
-                            loss_history.append({'step': step_count, 'losses': loss_snapshot})
+                            loss_history.append({'step': step_count, 'losses': loss_snapshot, 'lr': current_lr})
 
                         if step_count % print_every == 0:
-                            print(f"Step {step_count}/{total_steps}, LR: {current_lr:.6f}")
-                            print(f"  Total: {window_losses['total']/(print_every*accumulation_steps):.4f} | Segment: {window_losses['segment']/(print_every*accumulation_steps):.4f} | Param: {window_losses['param']/(print_every*accumulation_steps):.4f}")
+                            window_elapsed = time.time() - window_start
+                            mins, secs = divmod(int(window_elapsed), 60)
+                            print(f"Step {step_count}/{total_steps}, LR: {current_lr:.6f}", flush=True)
+                            print(f"  Total: {window_losses['total']/(print_every*accumulation_steps):.4f} | Segment: {window_losses['segment']/(print_every*accumulation_steps):.4f} | Param: {window_losses['param']/(print_every*accumulation_steps):.4f} | time: {mins:02d}:{secs:02d}s", flush=True)
                             for key in window_losses:
                                 window_losses[key] = 0.0
+                            window_start = time.time()
+                            torch.cuda.synchronize()
+                            torch.cuda.empty_cache()
 
                         if chunk_steps >= num_steps:
                             break
@@ -431,16 +449,18 @@ def train_exhaustively(
                         break
 
             del chunk_dataset
-            torch.cuda.empty_cache() if torch.cuda.is_available() else None
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+                torch.cuda.empty_cache()
             chunk_idx += 1
 
         rotation += 1
 
     model.save(model_path)
-    print(f"Training complete! Model saved to {model_path}")
+    print(f"Training complete! Model saved to {model_path}", flush=True)
 
     if record_loss is not None and loss_history:
         from .utils import save_pkl
         loss_path = f"{model_path}_loss_history.pkl"
         save_pkl(loss_history, loss_path)
-        print(f"Loss history saved to saves/{loss_path}")
+        print(f"Loss history saved to saves/{loss_path}", flush=True)

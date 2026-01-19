@@ -4,7 +4,6 @@ import torch.nn.functional as F
 import math
 from typing import List
 from .data import SegmentToken, Note
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
 class NoteEmbedding(nn.Module):
@@ -45,7 +44,7 @@ class SegmentEmbedding(nn.Module):
     def forward(self, tokens):
         batch_size, seq_len, _ = tokens.shape
 
-        embeddings = torch.zeros(batch_size, seq_len, self.d_model, device=device)
+        embeddings = torch.zeros(batch_size, seq_len, self.d_model, device=tokens.device)
 
         embeddings[:, 0] = self.sos_embed
 

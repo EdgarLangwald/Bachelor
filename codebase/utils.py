@@ -16,7 +16,7 @@ def save_pkl(data, filepath: str):
         pickle.dump(data, f)
 
 
-def plot_loss(filepath: str, detailed: bool = True):
+def plot_loss(filepath: str, detailed: bool = True, plot_lr: bool = False):
     load_path = Path("saves") / filepath
 
     with open(load_path, 'rb') as f:
@@ -55,13 +55,25 @@ def plot_loss(filepath: str, detailed: bool = True):
             line=dict(color='green', width=2)
         ))
 
+    if plot_lr:
+        lrs = [entry['lr'] for entry in loss_history]
+        max_lr = max(lrs)
+        lrs_normalized = [lr / max_lr for lr in lrs]
+        fig.add_trace(go.Scatter(
+            x=steps,
+            y=lrs_normalized,
+            mode='lines',
+            name=f'LR (normalized, max={max_lr:.2e})',
+            line=dict(color='purple', width=2, dash='dash')
+        ))
+
     fig.update_layout(
         title='Training Loss',
         xaxis_title='Steps',
-        yaxis_title='Loss',
         hovermode='x unified',
         legend=dict(yanchor="top", y=0.99, xanchor="right", x=0.99)
     )
+    fig.update_yaxes(title_text="Loss")
 
     return fig
 
@@ -273,7 +285,7 @@ def visualize_model(model, dataset, num_plots: int, device: str = 'cpu', exclude
         cols = min(max_cols, int(math.ceil(math.sqrt(num_plots))))
 
     rows = int(math.ceil(num_plots / cols))
-    scale_factor = min(max_cols / cols, 3.5)
+    scale_factor = min(max_cols / cols, 3.5) * 2.3
 
     fig = make_subplots(
         rows=rows,
@@ -338,8 +350,8 @@ def visualize_model(model, dataset, num_plots: int, device: str = 'cpu', exclude
                 hoverinfo='skip'
             ), row=row, col=col)
 
-            token_times = [token.time for token in generated_tokens]
-            token_heights = [token.height for token in generated_tokens]
+            token_times = [token.time for token in generated_tokens[1:]]
+            token_heights = [token.height for token in generated_tokens[1:]]
             fig.add_trace(go.Scatter(
                 x=token_times,
                 y=token_heights,
