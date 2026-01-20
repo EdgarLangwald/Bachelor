@@ -4,7 +4,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from pathlib import Path
 from typing import List
-from .data import SegmentEvent, SegmentToken
+from .data import SegmentEvent, SegmentToken, PedalEvent, Note
 import math
 import torch
 
@@ -116,6 +116,52 @@ def segs_to_curve(segments: List[SegmentEvent], num_points: int = 1000):
         values[mask] = [seg(t) for t in times[mask]]
 
     return times, values
+
+
+def segs_to_pedal(segments: List[SegmentEvent], sample_rate: int = 100) -> List[PedalEvent]:
+    from .preprocessing import segment
+
+    if not segments:
+        return []
+
+    min_time = segments[0].x_start
+    max_time = segments[-1].x_end
+    num_points = int((max_time - min_time) * sample_rate)
+
+    times = np.linspace(min_time, max_time, num_points)
+    pedal_events = []
+
+    for t in times:
+        for seg_event in segments:
+            if seg_event.x_start <= t <= seg_event.x_end:
+                seg = segment(seg_event.x_start, seg_event.y_start, seg_event.x_end, seg_event.y_end, seg_event.amount)
+                pedal_events.append(PedalEvent(time=t, value=seg(t)))
+                break
+
+    return pedal_events
+
+
+def export_to_midi(notes: List[Note], pedal_events: List[PedalEvent], filepath: str):
+    import pretty_midi
+
+    midi = pretty_midi.PrettyMIDI()
+    piano = pretty_midi.Instrument(program=0)
+
+    for note in notes:
+        midi_note = pretty_midi.Note(
+            velocity=max(1, note.velocity * 8),
+            pitch=note.pitch + 20,
+            start=note.start,
+            end=note.start + note.duration
+        )
+        piano.notes.append(midi_note)
+
+    for pedal in pedal_events:
+        cc = pretty_midi.ControlChange(number=64, value=int(pedal.value * 127), time=pedal.time)
+        piano.control_changes.append(cc)
+
+    midi.instruments.append(piano)
+    midi.write(filepath)
 
 
 def plot_list(
@@ -269,10 +315,12 @@ def visualize_teacher_forcing(model, dataset, device=None, title: str = "Teacher
     return fig
 
 
-def visualize_model(model, dataset, num_plots: int, device: str = 'cpu', exclude_context: bool = False, show_notes: bool = True, generate: bool = True, seed=None):
+def visualize_model(model, dataset, num_plots: int, device: str = 'cpu', exclude_context: bool = False, show_notes: bool = True, generate: bool = True, seed=None, title: str = None, ground_truth: bool = True, export_midi: bool = False):
     from .inference import generate as generate_fn, tokens_to_segs
-    from .data import Note
     import random
+
+    assert not export_midi or (generate != ground_truth), "export_midi requires exactly one of generate or ground_truth to be True"
+    assert not export_midi or title, "export_midi requires a title for the filename"
 
     if seed is not None:
         random.seed(seed)
@@ -285,7 +333,7 @@ def visualize_model(model, dataset, num_plots: int, device: str = 'cpu', exclude
         cols = min(max_cols, int(math.ceil(math.sqrt(num_plots))))
 
     rows = int(math.ceil(num_plots / cols))
-    scale_factor = min(max_cols / cols, 3.5) * 2.3
+    scale_factor = min(max_cols / cols, 3.5) * 1.5
 
     fig = make_subplots(
         rows=rows,
@@ -293,6 +341,8 @@ def visualize_model(model, dataset, num_plots: int, device: str = 'cpu', exclude
         vertical_spacing=0.015,
         horizontal_spacing=0.015
     )
+
+    all_shapes = []
 
     for i in range(num_plots):
         row = i // cols + 1
@@ -304,40 +354,47 @@ def visualize_model(model, dataset, num_plots: int, device: str = 'cpu', exclude
             notes = [Note(start=(10/88)*i, duration=10/88, pitch=i, velocity=1) for i in range(88)]
             tokens = []
 
-        ground_truth_segs = tokens_to_segs(tokens)
-        gt_times, gt_values = segs_to_curve(ground_truth_segs)
+        if ground_truth:
+            ground_truth_segs = tokens_to_segs(tokens)
+            gt_times, gt_values = segs_to_curve(ground_truth_segs)
 
         if generate:
             generated_tokens = generate_fn(model, notes, max_length=127, device=device)
             generated_segs = tokens_to_segs(generated_tokens)
             gen_times, gen_values = segs_to_curve(generated_segs)
 
-        if show_notes:
-            for note in notes:
-                y_bottom = note.pitch / 88
-                y_top = (note.pitch + 1) / 88
+        if export_midi:
+            segs = generated_segs if generate else ground_truth_segs
+            pedal_events = segs_to_pedal(segs)
+            export_to_midi(notes, pedal_events, f"{title}_{i}.mid")
 
-                fig.add_shape(
+        if show_notes:
+            axis_idx = (row - 1) * cols + col
+            xref = 'x' if axis_idx == 1 else f'x{axis_idx}'
+            yref = 'y' if axis_idx == 1 else f'y{axis_idx}'
+            for note in notes:
+                all_shapes.append(dict(
                     type='rect',
                     x0=note.start,
                     x1=note.start + note.duration,
-                    y0=y_bottom,
-                    y1=y_top,
-                    fillcolor='rgba(144, 238, 144, 0.75)',
+                    y0=note.pitch / 88,
+                    y1=(note.pitch + 1) / 88,
+                    fillcolor='rgba(144, 238, 144, 0.85)',
                     line=dict(width=0),
-                    row=row,
-                    col=col
-                )
+                    xref=xref,
+                    yref=yref
+                ))
 
-        fig.add_trace(go.Scatter(
-            x=gt_times,
-            y=gt_values,
-            mode='lines',
-            name='Ground Truth',
-            line=dict(color='blue', width=0.75 * scale_factor),
-            showlegend=False,
-            hoverinfo='skip'
-        ), row=row, col=col)
+        if ground_truth:
+            fig.add_trace(go.Scatter(
+                x=gt_times,
+                y=gt_values,
+                mode='lines',
+                name='Ground Truth',
+                line=dict(color='blue', width=0.75 * scale_factor * (1 - 0.4 * show_notes)),
+                showlegend=False,
+                hoverinfo='skip'
+            ), row=row, col=col)
 
         if generate:
             fig.add_trace(go.Scatter(
@@ -345,7 +402,7 @@ def visualize_model(model, dataset, num_plots: int, device: str = 'cpu', exclude
                 y=gen_values,
                 mode='lines',
                 name='Generated',
-                line=dict(color='red', width=0.75 * scale_factor),
+                line=dict(color='red', width=0.75 * scale_factor * (1 - 0.4 * show_notes)),
                 showlegend=False,
                 hoverinfo='skip'
             ), row=row, col=col)
@@ -357,10 +414,13 @@ def visualize_model(model, dataset, num_plots: int, device: str = 'cpu', exclude
                 y=token_heights,
                 mode='markers',
                 name='Tokens',
-                marker=dict(size=1.6 * scale_factor, color='orange'),
+                marker=dict(size=1.6 * scale_factor * (1 - 0.4 * show_notes), color='orange'),
                 showlegend=False,
                 hoverinfo='skip'
             ), row=row, col=col)
+
+    if all_shapes:
+        fig.update_layout(shapes=all_shapes)
 
     fig.update_xaxes(showticklabels=False, showgrid=False, zeroline=False)
     fig.update_yaxes(showticklabels=False, showgrid=False, zeroline=False)
@@ -368,10 +428,11 @@ def visualize_model(model, dataset, num_plots: int, device: str = 'cpu', exclude
     height_per_plot = 70 * scale_factor
     width_per_plot = 125 * scale_factor
     fig.update_layout(
+        title=title,
         height=height_per_plot * rows,
         width=width_per_plot * cols,
         showlegend=False,
-        margin=dict(l=10, r=10, t=10, b=10),
+        margin=dict(l=10, r=10, t=40 if title else 10, b=10),
         hovermode=False
     )
 
