@@ -16,7 +16,7 @@ def save_pkl(data, filepath: str):
         pickle.dump(data, f)
 
 
-def plot_loss(filepath: str, detailed: bool = True, plot_lr: bool = False):
+def plot_loss(filepath: str, detailed: bool = True, plot_lr: bool = False, title: str = 'Training Loss'):
     load_path = Path("saves") / filepath
 
     with open(load_path, 'rb') as f:
@@ -27,17 +27,18 @@ def plot_loss(filepath: str, detailed: bool = True, plot_lr: bool = False):
 
     fig = go.Figure()
 
-    fig.add_trace(go.Scatter(
-        x=steps,
-        y=total_losses,
-        mode='lines',
-        name='Total Loss',
-        line=dict(color='blue', width=2)
-    ))
-
     if detailed:
         segment_losses = [entry['losses']['segment'] for entry in loss_history]
         param_losses = [entry['losses']['param'] for entry in loss_history]
+        sum_losses = [s + p for s, p in zip(segment_losses, param_losses)]
+
+        fig.add_trace(go.Scatter(
+            x=steps,
+            y=sum_losses,
+            mode='lines',
+            name='Sum',
+            line=dict(color='blue', width=2)
+        ))
 
         fig.add_trace(go.Scatter(
             x=steps,
@@ -54,6 +55,14 @@ def plot_loss(filepath: str, detailed: bool = True, plot_lr: bool = False):
             name='Param Loss',
             line=dict(color='green', width=2)
         ))
+    else:
+        fig.add_trace(go.Scatter(
+            x=steps,
+            y=total_losses,
+            mode='lines',
+            name='Total Loss',
+            line=dict(color='blue', width=2)
+        ))
 
     if plot_lr:
         lrs = [entry['lr'] for entry in loss_history]
@@ -68,12 +77,16 @@ def plot_loss(filepath: str, detailed: bool = True, plot_lr: bool = False):
         ))
 
     fig.update_layout(
-        title='Training Loss',
+        title=title,
         xaxis_title='Steps',
         hovermode='x unified',
         legend=dict(yanchor="top", y=0.99, xanchor="right", x=0.99)
     )
-    fig.update_yaxes(title_text="Loss")
+    fig.update_yaxes(
+        title_text="Loss",
+        range=[0, 3.9],
+        tickvals=[0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5]
+    )
 
     return fig
 

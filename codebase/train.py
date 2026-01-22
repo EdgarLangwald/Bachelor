@@ -261,7 +261,8 @@ def train_exhaustively(
     num_workers=0,
     add_checkpoints=None,
     record_loss=None,
-    start_training_at=0
+    start_training_at=0,
+    ema_decay=0.99
 ):
     from .utils import load_dataset
     from torch.utils.data import DataLoader
@@ -316,6 +317,9 @@ def train_exhaustively(
     optimizer.zero_grad()
 
     loss_history = [] if record_loss is not None else None
+
+    segment_loss_ema = None
+    param_loss_ema = None
     start_rotation = chunks_done // len(chunk_paths)
     start_chunk = chunks_done % len(chunk_paths)
 
@@ -372,9 +376,24 @@ def train_exhaustively(
                                 tgt_mask=tgt_mask,
                                 tgt_key_padding_mask=tgt_key_padding_mask
                             )
-                            segment_loss = compute_segment_loss(model_output, tokens, tgt_key_padding_mask)
-                            param_loss = compute_param_loss(model_output, tokens, tgt_key_padding_mask)
-                            loss = alpha * segment_loss + (1 - alpha) * param_loss
+
+                            if alpha == 1:
+                                segment_loss = compute_segment_loss(model_output, tokens, tgt_key_padding_mask)
+                                param_loss = torch.tensor(0.0, device=device)
+                                loss = segment_loss
+                            elif alpha == 0:
+                                segment_loss = torch.tensor(0.0, device=device)
+                                param_loss = compute_param_loss(model_output, tokens, tgt_key_padding_mask)
+                                loss = param_loss
+                            else:
+                                segment_loss = compute_segment_loss(model_output, tokens, tgt_key_padding_mask)
+                                param_loss = compute_param_loss(model_output, tokens, tgt_key_padding_mask)
+                                segment_loss_ema = segment_loss.item() if segment_loss_ema is None else ema_decay * segment_loss_ema + (1 - ema_decay) * segment_loss.item()
+                                param_loss_ema = param_loss.item() if param_loss_ema is None else ema_decay * param_loss_ema + (1 - ema_decay) * param_loss.item()
+                                norm_segment = segment_loss / (segment_loss_ema + 1e-8)
+                                norm_param = param_loss / (param_loss_ema + 1e-8)
+                                loss = alpha * norm_segment + (1 - alpha) * norm_param
+
                             loss_dict = {
                                 'total': loss.item(),
                                 'segment': segment_loss.item(),
@@ -389,9 +408,24 @@ def train_exhaustively(
                             tgt_mask=tgt_mask,
                             tgt_key_padding_mask=tgt_key_padding_mask
                         )
-                        segment_loss = compute_segment_loss(model_output, tokens, tgt_key_padding_mask)
-                        param_loss = compute_param_loss(model_output, tokens, tgt_key_padding_mask)
-                        loss = alpha * segment_loss + (1 - alpha) * param_loss
+
+                        if alpha == 1:
+                            segment_loss = compute_segment_loss(model_output, tokens, tgt_key_padding_mask)
+                            param_loss = torch.tensor(0.0, device=device)
+                            loss = segment_loss
+                        elif alpha == 0:
+                            segment_loss = torch.tensor(0.0, device=device)
+                            param_loss = compute_param_loss(model_output, tokens, tgt_key_padding_mask)
+                            loss = param_loss
+                        else:
+                            segment_loss = compute_segment_loss(model_output, tokens, tgt_key_padding_mask)
+                            param_loss = compute_param_loss(model_output, tokens, tgt_key_padding_mask)
+                            segment_loss_ema = segment_loss.item() if segment_loss_ema is None else ema_decay * segment_loss_ema + (1 - ema_decay) * segment_loss.item()
+                            param_loss_ema = param_loss.item() if param_loss_ema is None else ema_decay * param_loss_ema + (1 - ema_decay) * param_loss.item()
+                            norm_segment = segment_loss / (segment_loss_ema + 1e-8)
+                            norm_param = param_loss / (param_loss_ema + 1e-8)
+                            loss = alpha * norm_segment + (1 - alpha) * norm_param
+
                         loss_dict = {
                             'total': loss.item(),
                             'segment': segment_loss.item(),

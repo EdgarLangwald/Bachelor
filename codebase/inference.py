@@ -7,11 +7,8 @@ from .data import SegmentToken, SegmentEvent, Note
 def generate(model, notes: List[Note], max_length: int = 127, device: str = 'cpu') -> List[SegmentToken]:
     model.eval()
 
-    notes_tensor = torch.tensor(
-        [[[note.start, note.duration, note.pitch, note.velocity] for note in notes]],
-        dtype=torch.float32,
-        device=device
-    )
+    notes_array = [[note.start, note.duration, note.pitch, note.velocity] for note in notes]
+    notes_tensor = torch.tensor(notes_array, dtype=torch.float32, device=device).reshape(1, len(notes), 4)
 
     generated_tokens = [SegmentToken(height=0.0, amount=0.0, time=0.0)]
 

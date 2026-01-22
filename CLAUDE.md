@@ -14,6 +14,7 @@ Project Path: `C:\Users\edgar\Documents\Studium\Mathe\Bachelor\Code`
    - `preprocessing.py`
    - `train.py`
    - `utils.py`
+   - `evaluate.py`
 
 - midiBERT
    - `data.py`
