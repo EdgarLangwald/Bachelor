@@ -8,6 +8,7 @@ The project has a customly made transformer approach in codebase and a pretraine
 Project Path: `C:\Users\edgar\Documents\Studium\Mathe\Bachelor\Code`
 
 - codebase (folder)
+   - `miscellaneous` (folder)
    - `data.py`
    - `inference.py`
    - `model.py`
@@ -15,16 +16,6 @@ Project Path: `C:\Users\edgar\Documents\Studium\Mathe\Bachelor\Code`
    - `train.py`
    - `utils.py`
    - `evaluate.py`
-
-- midiBERT
-   - `data.py`
-   - `inference.py`
-   - `midibert_wrapper.py`
-   - `model.py`
-   - `preprocessing.py`
-   - `tokenization.py`
-   - `train.py`
-   - `utils.py`
 
 - Orga (folder)
     - LucidChart.png - Overview of the entire project in UML diagram. Best way to get overwiev of the project.
@@ -34,7 +25,7 @@ Project Path: `C:\Users\edgar\Documents\Studium\Mathe\Bachelor\Code`
 - saves (folder)
 - ML_With_Torch_venv (folder) - 
 - main_codebase.ipynb and main_midiBERT.ipynb- where user runs and tests code from
-- main.py - For Claude Code to use to run and debug main code. Always keep it very minimal so user quickly sees what Claude is testing
+- main.py - For Claude Code to run and debug main code. Always keep it very minimal so user quickly sees what Claude is up to
 
 # How to run code
 cd "C:/Users/edgar/Documents/Studium/Mathe/Bachelor/Code" && ML_With_Torch_venv/Scripts/python.exe example_script.py
