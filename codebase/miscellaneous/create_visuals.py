@@ -375,7 +375,7 @@ def plot_with_densification(pedal_events, start_time, end_time, seed=42):
     fig.add_trace(go.Scatter(
         x=data['dense_time'], y=data['dense_value'],
         mode='markers', name='Densification Points',
-        marker=dict(color='black', size=3)
+        marker=dict(color='black', size=4)
     ))
 
     fig.update_layout(
@@ -408,14 +408,14 @@ def plot_with_rdp(pedal_events, start_time, end_time, epsilon=0.12, seed=42, use
         fig.add_trace(go.Scatter(
             x=data['dense_time'], y=data['dense_value'],
             mode='markers', name='Densification Points',
-            marker=dict(color='black', size=3)
+            marker=dict(color='black', size=4)
         ))
 
     # RDP selected points
     fig.add_trace(go.Scatter(
         x=data['rdp_xs'], y=data['rdp_ys'],
         mode='markers', name='RDP Selected Points',
-        marker=dict(color='blue', size=10, symbol='circle')
+        marker=dict(color='orange', size=10, symbol='circle')
     ))
 
     fig.update_layout(
@@ -448,14 +448,14 @@ def plot_with_zero_adjustment(pedal_events, start_time, end_time, epsilon=0.12, 
         fig.add_trace(go.Scatter(
             x=data['dense_time'], y=data['dense_value'],
             mode='markers', name='Densification Points',
-            marker=dict(color='black', size=3)
+            marker=dict(color='black', size=4)
         ))
 
-    # RDP selected points (blue)
+    # RDP selected points (orange)
     fig.add_trace(go.Scatter(
         x=data['rdp_xs'], y=data['rdp_ys'],
         mode='markers', name='RDP Selected Points',
-        marker=dict(color='blue', size=10, symbol='circle')
+        marker=dict(color='orange', size=10, symbol='circle')
     ))
 
     # Find points that were adjusted (in final but different from rdp, or new zeros)
@@ -471,7 +471,7 @@ def plot_with_zero_adjustment(pedal_events, start_time, end_time, epsilon=0.12, 
         fig.add_trace(go.Scatter(
             x=adjusted_xs, y=adjusted_ys,
             mode='markers', name='Adjusted Points',
-            marker=dict(color='red', size=10, symbol='circle')
+            marker=dict(color='green', size=10, symbol='circle')
         ))
 
     fig.update_layout(
@@ -509,17 +509,17 @@ def plot_with_segments(pedal_events, start_time, end_time, epsilon=0.12, seed=42
         seg_values = [seg(t) for t in seg_times]
         fig.add_trace(go.Scatter(
             x=seg_times, y=seg_values,
-            mode='lines', name=f'Segment {i+1}' if i == 0 else None,
-            line=dict(color='green', width=2.5),
+            mode='lines', name=f'Segments',
+            line=dict(color='blue', width=2.5),
             showlegend=(i == 0),
             legendgroup='segments'
         ))
 
-    # All selected points (blue)
+    # All selected points (orange)
     fig.add_trace(go.Scatter(
         x=data['final_xs'], y=data['final_ys'],
         mode='markers', name='Selected Points',
-        marker=dict(color='blue', size=10, symbol='circle')
+        marker=dict(color='orange', size=10, symbol='circle')
     ))
 
     fig.update_layout(

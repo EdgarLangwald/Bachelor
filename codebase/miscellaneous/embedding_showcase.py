@@ -80,40 +80,54 @@ def plot_embedding_example(segments, notes):
     seg1_mask = times <= segments[0].x_end
     seg2_mask = times >= segments[1].x_start
 
+    # Column header (invisible)
+    fig.add_trace(go.Scatter(
+        x=[None], y=[None],
+        mode='markers',
+        marker=dict(size=0, color='rgba(0,0,0,0)'),
+        name='Seg:      time, height'
+    ))
     # Point 1
     fig.add_trace(go.Scatter(
         x=[endpoints[0][0]], y=[endpoints[0][1]],
         mode='markers',
         marker=dict(size=10, color='orange'),
-        name=f'Point 1: (t={endpoints[0][0]}, h={endpoints[0][1]})'
-    ))
-    # Amount 1 (segment 1 curve)
-    fig.add_trace(go.Scatter(
-        x=times[seg1_mask], y=values[seg1_mask],
-        mode='lines',
-        line=dict(color='blue', width=2),
-        name=f'Amount 1: {segments[0].amount}'
+        name=f'Point 1:  {endpoints[0][0]},      {endpoints[0][1]}'
     ))
     # Point 2
     fig.add_trace(go.Scatter(
         x=[endpoints[1][0]], y=[endpoints[1][1]],
         mode='markers',
         marker=dict(size=10, color='orange'),
-        name=f'Point 2: (t={endpoints[1][0]}, h={endpoints[1][1]})'
-    ))
-    # Amount 2 (segment 2 curve)
-    fig.add_trace(go.Scatter(
-        x=times[seg2_mask], y=values[seg2_mask],
-        mode='lines',
-        line=dict(color='blue', width=2),
-        name=f'Amount 2: {segments[1].amount}'
+        name=f'Point 2:  {endpoints[1][0]},   {endpoints[1][1]}'
     ))
     # Point 3
     fig.add_trace(go.Scatter(
         x=[endpoints[2][0]], y=[endpoints[2][1]],
         mode='markers',
         marker=dict(size=10, color='orange'),
-        name=f'Point 3: (t={endpoints[2][0]}, h={endpoints[2][1]})'
+        name=f'Point 3:  {endpoints[2][0]},   {endpoints[2][1]}'
+    ))
+    # Column header for lines (invisible)
+    fig.add_trace(go.Scatter(
+        x=[None], y=[None],
+        mode='markers',
+        marker=dict(size=0, color='rgba(0,0,0,0)'),
+        name='             amount'
+    ))
+    # Line 1 (segment 1 curve)
+    fig.add_trace(go.Scatter(
+        x=times[seg1_mask], y=values[seg1_mask],
+        mode='lines',
+        line=dict(color='blue', width=2),
+        name=f'line 1:    {segments[0].amount}'
+    ))
+    # Line 2 (segment 2 curve)
+    fig.add_trace(go.Scatter(
+        x=times[seg2_mask], y=values[seg2_mask],
+        mode='lines',
+        line=dict(color='blue', width=2),
+        name=f'line 2:    {segments[1].amount}'
     ))
 
     # Notes as rectangles
@@ -126,12 +140,27 @@ def plot_embedding_example(segments, notes):
             fillcolor='rgba(144, 238, 144, 1)',
             line=dict(width=0),
         )
-        fig.add_trace(go.Scatter(
-            x=[None], y=[None],
-            mode='markers',
-            marker=dict(size=10, color='rgba(144, 238, 144, 1)', symbol='square'),
-            name=f'Note {i+1}: (s={note.start}, d={note.duration}, p={note.pitch}, v={note.velocity})'
-        ))
+    # Column header for notes (invisible)
+    fig.add_trace(go.Scatter(
+        x=[None], y=[None],
+        mode='markers',
+        marker=dict(size=0, color='rgba(0,0,0,0)'),
+        name='             time, dur,   pitch, vel'
+    ))
+    # Note 1 legend entry
+    fig.add_trace(go.Scatter(
+        x=[None], y=[None],
+        mode='markers',
+        marker=dict(size=10, color='rgba(144, 238, 144, 1)', symbol='square'),
+        name=f'Note 1:  {notes[0].start},   {notes[0].duration},   {notes[0].pitch},    {notes[0].velocity}'
+    ))
+    # Note 2 legend entry
+    fig.add_trace(go.Scatter(
+        x=[None], y=[None],
+        mode='markers',
+        marker=dict(size=10, color='rgba(144, 238, 144, 1)', symbol='square'),
+        name=f'Note 2:  {notes[1].start},   {notes[1].duration},   {notes[1].pitch},    {notes[1].velocity}'
+    ))
 
     fig.update_layout(
         title="Note and Segment tokenization example",

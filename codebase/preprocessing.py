@@ -18,6 +18,7 @@ class segment:
         self.x_end = x_end
         self.y_end = y_end
         self.amount = amount * 3 - 0.5
+        self.rational_amount = self.reparam(amount)
 
     def a(self, x):
         return x**3
@@ -56,7 +57,14 @@ class segment:
         if self.amount > 1:
             return self.S1(x)
         return self.S2(x)
-
+    
+    def reparam(self, amount):
+        val = (0.1414 + 0.8586 * amount) / (1 - 0.8586 * amount)
+        return val * val
+    
+    def Rational(self, x):
+        return x / (x + self.rational_amount * (1 - x))
+    
     def norm(self, x):
         return (x - self.x_start) / (self.x_end - self.x_start)
 
