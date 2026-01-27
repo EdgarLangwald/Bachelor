@@ -54,14 +54,14 @@ class Dataset(TorchDataset):
         if track_idx is None:
             track_idx = random.randint(0, len(self.tracks) - 1)
 
+        notes, tokens = self.tracks[track_idx]
         track_length = self.get_track_length(track_idx)
+        min_time = tokens[0].time
 
         if time is not None:
-            assert time <= track_length - window_size, f"Choose time between 0 and {track_length - window_size} seconds"
+            assert min_time <= time <= track_length - window_size, f"Choose time between {min_time} and {track_length - window_size} seconds"
         else:
-            time = random.uniform(0, track_length - window_size)
-
-        notes, tokens = self.tracks[track_idx]
+            time = random.uniform(min_time, track_length - window_size)
         window_end = time + window_size
 
         windowed_notes = [

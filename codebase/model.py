@@ -7,35 +7,47 @@ from .data import SegmentToken, Note
 
 
 class NoteEmbedding(nn.Module):
-    def __init__(self, d_model: int):
+    def __init__(self, d_model: int, mode: str = "concat"):
         super().__init__()
-        assert (d_model // 4) * 4 == d_model, "d_model must be diviseable by 3 and 4"
         self.d_model = d_model
+        self.mode = mode
 
-        embed_dim = d_model // 4
+        if mode == "concat":
+            assert d_model % 4 == 0, "d_model must be divisible by 12 for concat mode"
+            embed_dim = d_model // 4
+        else:
+            embed_dim = d_model
+
         self.start_embed = nn.Linear(1, embed_dim)
         self.duration_embed = nn.Linear(1, embed_dim)
         self.pitch_embed = nn.Embedding(88, embed_dim)
         self.velocity_embed = nn.Embedding(17, embed_dim)
 
     def forward(self, notes):
-
         start = self.start_embed(notes[:, :, 0:1])
         duration = self.duration_embed(notes[:, :, 1:2])
         pitch = self.pitch_embed(notes[:, :, 2].long())
         velocity = self.velocity_embed(notes[:, :, 3].long())
 
-        return torch.cat([start, duration, pitch, velocity], dim=-1)
+        if self.mode == "concat":
+            return torch.cat([start, duration, pitch, velocity], dim=-1)
+        else:
+            return start + duration + pitch + velocity
 
 
 class SegmentEmbedding(nn.Module):
-    def __init__(self, d_model: int):
+    def __init__(self, d_model: int, mode: str = "concat"):
         super().__init__()
         self.d_model = d_model
-        assert (d_model // 3) * 3 == d_model, "d_model must be diviseable by 3 and 4"
+        self.mode = mode
         self.sos_embed = nn.Parameter(torch.randn(d_model))
 
-        embed_dim = d_model // 3
+        if mode == "concat":
+            assert d_model % 3 == 0, "d_model must be divisible by 12 for concat mode"
+            embed_dim = d_model // 3
+        else:
+            embed_dim = d_model
+
         self.height_embed = nn.Linear(1, embed_dim)
         self.amount_embed = nn.Linear(1, embed_dim)
         self.time_embed = nn.Linear(1, embed_dim)
@@ -45,19 +57,24 @@ class SegmentEmbedding(nn.Module):
         batch_size, seq_len, _ = tokens.shape
 
         embeddings = torch.zeros(batch_size, seq_len, self.d_model, device=tokens.device)
-
         embeddings[:, 0] = self.sos_embed
 
         if seq_len > 1:
-            h1 = self.height_embed(tokens[:, 1:2, 0].unsqueeze(-1))
-            t1 = self.time_embed(tokens[:, 1:2, 2].unsqueeze(-1))
-            embeddings[:, 1] = torch.cat([h1.squeeze(1), self.first_amount_vector.unsqueeze(0).expand(batch_size, -1), t1.squeeze(1)], dim=-1)
+            h1 = self.height_embed(tokens[:, 1:2, 0].unsqueeze(-1)).squeeze(1)
+            t1 = self.time_embed(tokens[:, 1:2, 2].unsqueeze(-1)).squeeze(1)
+            if self.mode == "concat":
+                embeddings[:, 1] = torch.cat([h1, self.first_amount_vector.unsqueeze(0).expand(batch_size, -1), t1], dim=-1)
+            else:
+                embeddings[:, 1] = h1 + self.first_amount_vector.unsqueeze(0) + t1
 
         if seq_len > 2:
             h = self.height_embed(tokens[:, 2:, 0].unsqueeze(-1))
             a = self.amount_embed(tokens[:, 2:, 1].unsqueeze(-1))
             t = self.time_embed(tokens[:, 2:, 2].unsqueeze(-1))
-            embeddings[:, 2:] = torch.cat([h, a, t], dim=-1)
+            if self.mode == "concat":
+                embeddings[:, 2:] = torch.cat([h, a, t], dim=-1)
+            else:
+                embeddings[:, 2:] = h + a + t
 
         return embeddings
 
@@ -70,7 +87,8 @@ class Model(nn.Module):
         num_encoder_layers: int,
         num_decoder_layers: int,
         dim_feedforward: int,
-        dropout: float = 0.1
+        dropout: float = 0.1,
+        embedding_mode: str = "concat"
     ):
         super().__init__()
 
@@ -80,12 +98,13 @@ class Model(nn.Module):
             'num_encoder_layers': num_encoder_layers,
             'num_decoder_layers': num_decoder_layers,
             'dim_feedforward': dim_feedforward,
-            'dropout': dropout
+            'dropout': dropout,
+            'embedding_mode': embedding_mode
         }
         self.d_model = d_model
 
-        self.note_embedding = NoteEmbedding(d_model)
-        self.segment_embedding = SegmentEmbedding(d_model)
+        self.note_embedding = NoteEmbedding(d_model, embedding_mode)
+        self.segment_embedding = SegmentEmbedding(d_model, embedding_mode)
         self.note_pos_emb = nn.Embedding(600, d_model)
         self.seg_pos_emb = nn.Embedding(150, d_model)
 
