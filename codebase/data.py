@@ -45,9 +45,10 @@ class Dataset(TorchDataset):
 
     def get_track_length(self, track_idx: int) -> float:
         notes, tokens = self.tracks[track_idx]
-        return notes[-1].start + notes[-1].duration
+        return max(notes[-1].start + notes[-1].duration, tokens[-1].time)
 
     def __call__(self, track_idx: int = None, time: float = None, window_size=10) -> Tuple[List[Note], List[SegmentToken]]:
+        import bisect
         from .preprocessing import segment
 
         if track_idx is None:
@@ -74,55 +75,47 @@ class Dataset(TorchDataset):
             if n.start < window_end and n.start + n.duration > time
         ]
 
-        windowed_tokens = [
-            SegmentToken(
-                height=s.height,
-                amount=s.amount,
-                time=s.time - time
-            )
-            for s in tokens if time < s.time < window_end
-        ]
+        token_times = [t.time for t in tokens]
 
-        sos = SegmentToken(height=0.0, amount=0.0, time=0.0)
-        result_tokens = [sos]
+        lr_idx = bisect.bisect_right(token_times, time)
+        ll_idx = lr_idx - 1
+        rr_idx = bisect.bisect_right(token_times, window_end)
+        rl_idx = rr_idx - 1
 
-        if tokens[0].time <= time and tokens[-1].time > time:
-            left_border_token = self._create_border_token(tokens, time, window_size, is_left=True)
-            result_tokens.append(left_border_token)
+        result_tokens = [SegmentToken(height=0.0, amount=0.0, time=0.0)]
 
-        result_tokens.extend(windowed_tokens)
-
-        if tokens[0].time <= window_end and tokens[-1].time > window_end:
-            right_border_token = self._create_border_token(tokens, time, window_size, is_left=False)
-            result_tokens.append(right_border_token)
-
-        windowed_tokens = result_tokens
-
-        return windowed_notes, windowed_tokens
-
-    def _create_border_token(self, tokens: List[SegmentToken], time: float, window_size: float, is_left: bool) -> SegmentToken:
-        from .preprocessing import segment
-
-        border_time = time if is_left else time + window_size
-
-        left_token = None
-        right_token = None
-        for i, token in enumerate(tokens):
-            if token.time <= border_time:
-                left_token = token
-            if token.time > border_time and right_token is None:
-                right_token = token
-                break
-
-        assert left_token is not None and right_token is not None, "Border tokens not found"
-
-        seg = segment(left_token.time, left_token.height, right_token.time, right_token.height, right_token.amount)
-        border_height = seg(border_time)
-
-        if is_left:
-            return SegmentToken(height=border_height, amount=0.0, time=0.0)
+        if lr_idx >= len(tokens):
+            left_border = SegmentToken(height=tokens[ll_idx].height, amount=0.0, time=0.0)
+            inner_start_idx = len(tokens)
+        elif tokens[lr_idx].time - time < 0.1:
+            left_border = SegmentToken(height=tokens[lr_idx].height, amount=0.0, time=0.0)
+            inner_start_idx = lr_idx + 1
         else:
-            return SegmentToken(height=border_height, amount=right_token.amount, time=window_size)
+            seg = segment(tokens[ll_idx].time, tokens[ll_idx].height, tokens[lr_idx].time, tokens[lr_idx].height, tokens[lr_idx].amount)
+            left_border = SegmentToken(height=seg(time), amount=0.0, time=0.0)
+            inner_start_idx = lr_idx
+        result_tokens.append(left_border)
+
+        for i in range(inner_start_idx, rl_idx + 1):
+            result_tokens.append(SegmentToken(
+                height=tokens[i].height,
+                amount=tokens[i].amount,
+                time=tokens[i].time - time
+            ))
+
+        if rr_idx >= len(tokens):
+            right_border = SegmentToken(height=tokens[rl_idx].height, amount=0.5, time=window_size)
+        elif window_end - tokens[rl_idx].time < 0.1 and len(result_tokens) > 2:
+            result_tokens[-1] = SegmentToken(height=tokens[rl_idx].height, amount=tokens[rl_idx].amount, time=window_size)
+            right_border = None
+        else:
+            seg = segment(tokens[rl_idx].time, tokens[rl_idx].height, tokens[rr_idx].time, tokens[rr_idx].height, tokens[rr_idx].amount)
+            right_border = SegmentToken(height=seg(window_end), amount=tokens[rr_idx].amount, time=window_size)
+
+        if right_border is not None:
+            result_tokens.append(right_border)
+
+        return windowed_notes, result_tokens
 
     def __getitem__(self, idx: int) -> Tuple[List[Note], List[SegmentToken]]:
         return self()
