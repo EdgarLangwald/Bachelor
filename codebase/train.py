@@ -365,6 +365,10 @@ def train_exhaustively(
                     src_key_padding_mask = batch['src_key_padding_mask'].to(device)
                     tgt_key_padding_mask = batch['tgt_key_padding_mask'].to(device)
 
+                    if tokens.size(1) < 3:
+                        print(f"Sample skipped at step {step_count}")
+                        continue
+
                     seq_len = tokens.size(1)
                     tgt_mask = torch.triu(torch.ones(seq_len, seq_len, device=device), diagonal=1).bool()
 
