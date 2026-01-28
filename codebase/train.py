@@ -230,8 +230,7 @@ def train(batch_size, lr, num_steps, device, model=None, print_every=100, datase
             loss_dict = step(model, batch, optimizer, device, alpha=alpha)
 
             if any(math.isnan(v) for v in loss_dict.values()):
-                track_idx, time = dataset.last_sample_info
-                print(f"NaN loss! track_idx={track_idx}, time={time:.3f}", flush=True)
+                print(f"NaN loss!", flush=True)
                 continue
 
             for key in window_losses:
@@ -409,8 +408,7 @@ def train_exhaustively(
                             }
 
                         if any(math.isnan(v) for v in loss_dict.values()):
-                            track_idx, time = chunk_dataset.last_sample_info
-                            print(f"NaN loss! track_idx={track_idx}, time={time:.3f}, tokens={batch['tokens']}", flush=True)
+                            print(f"NaN loss! tokens={batch['tokens']}", flush=True)
                             optimizer.zero_grad()
                             continue
 
@@ -448,8 +446,7 @@ def train_exhaustively(
                         }
 
                         if any(math.isnan(v) for v in loss_dict.values()):
-                            track_idx, time = chunk_dataset.last_sample_info
-                            print(f"NaN loss! track_idx={track_idx}, time={time:.3f}, tokens={batch['tokens']}", flush=True)
+                            print(f"NaN loss! tokens={batch['tokens']}", flush=True)
                             optimizer.zero_grad()
                             continue
 
