@@ -39,6 +39,7 @@ class SegmentToken:
 class Dataset(TorchDataset):
     def __init__(self):
         self.tracks = [] # type(track) = Tuple[List[Note], List[SegmentToken]]
+        self.last_sample_info = None
 
     def add_tracks(self, notes: List[Note], tokens: List[SegmentToken]):
         self.tracks.append((notes, tokens))
@@ -62,6 +63,8 @@ class Dataset(TorchDataset):
             assert min_time <= time <= track_length - window_size, f"Choose time between {min_time} and {track_length - window_size} seconds"
         else:
             time = random.uniform(min_time, track_length - window_size)
+
+        self.last_sample_info = (track_idx, time)
         window_end = time + window_size
 
         windowed_notes = [

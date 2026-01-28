@@ -1,5 +1,6 @@
 import torch
 import torch.nn.functional as F
+import math
 from typing import Dict, Tuple
 from .data import SegmentToken
 from .utils import TorchSegment
@@ -226,8 +227,13 @@ def train(batch_size, lr, num_steps, device, model=None, print_every=100, datase
     print("Starting training loop...")
     while step_count < num_steps:
         for batch in dataloader:
-
             loss_dict = step(model, batch, optimizer, device, alpha=alpha)
+
+            if any(math.isnan(v) for v in loss_dict.values()):
+                track_idx, time = dataset.last_sample_info
+                print(f"NaN loss! track_idx={track_idx}, time={time:.3f}", flush=True)
+                continue
+
             for key in window_losses:
                 window_losses[key] += loss_dict[key]
             step_count += 1
@@ -351,8 +357,10 @@ def train_exhaustively(
             window_start = time.time()
             first_batch = True
             chunk_steps = 0
+            batch_counter = 0
             while chunk_steps < num_steps:
                 for batch in dataloader:
+                    batch_counter += 1
                     if first_batch:
                         load_elapsed = time.time() - window_start
                         print(f"Data loaded, time: {int(load_elapsed)}s", flush=True)
@@ -399,7 +407,14 @@ def train_exhaustively(
                                 'segment': segment_loss.item(),
                                 'param': param_loss.item()
                             }
-                            loss = loss / accumulation_steps
+
+                        if any(math.isnan(v) for v in loss_dict.values()):
+                            track_idx, time = chunk_dataset.last_sample_info
+                            print(f"NaN loss! track_idx={track_idx}, time={time:.3f}, tokens={batch['tokens']}", flush=True)
+                            optimizer.zero_grad()
+                            continue
+
+                        loss = loss / accumulation_steps
                         scaler.scale(loss).backward()
                     else:
                         model_output = model(
@@ -431,6 +446,13 @@ def train_exhaustively(
                             'segment': segment_loss.item(),
                             'param': param_loss.item()
                         }
+
+                        if any(math.isnan(v) for v in loss_dict.values()):
+                            track_idx, time = chunk_dataset.last_sample_info
+                            print(f"NaN loss! track_idx={track_idx}, time={time:.3f}, tokens={batch['tokens']}", flush=True)
+                            optimizer.zero_grad()
+                            continue
+
                         loss = loss / accumulation_steps
                         loss.backward()
 
