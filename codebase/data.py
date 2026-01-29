@@ -97,6 +97,9 @@ class Dataset(TorchDataset):
             result_tokens.append(right_border_token)
 
         windowed_tokens = result_tokens
+        
+        if len(windowed_tokens) < 3:
+            print(f"Track Index: {track_idx}, Time: {time} returned less then 3 segment tokens!!")
 
         return windowed_notes, windowed_tokens
 
