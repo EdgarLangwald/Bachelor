@@ -1,35 +1,28 @@
 import torch
 from codebase.model import Model
-from codebase.train import train_exhaustively
+from codebase.data import Dataset
+from codebase.train import train, train_exhaustively
+from codebase.inference import generate, tokens_to_segs
+from codebase.utils import load_dataset, visualize_model, visualize_teacher_forcing, plot_loss, save_pkl
 from codebase.preprocessing import create_dataset
+from codebase.evaluate import evaluate
+from codebase.miscellaneous.explore_curve_families import plot_track_segments
+
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 
 if __name__ == '__main__':
-    dataset = create_dataset(
-        split="train",
-        dataset_path="maestro-v3.0.0", 
-        seg_fit_tightness=0.12,
-        nocturnes=False,
-        track_idx=None,
-        num_workers=7,
-        max_chunk_size_mb=10000,
-        output_file="dataset"
-    )
-    
-    device = torch.device('cuda')
-    train_exhaustively(
-        batch_size=100,
-        lr=1e-4,
-        num_steps=500000,
-        device="cuda",
-        model=Model(516, 6, 6, 8, 2064, 0.1),
-        print_every=100,
-        model_path="HPC_model.pt",
-        dataset_path="dataset",
-        accumulation_steps=1,
-        num_rotations=1,
-        num_workers=7,
-        alpha=0.5,
-        add_checkpoints=50000,
-        record_loss=500,
-    )
+    dataset = load_dataset("test_set/chunk_0.pkl")
+    model = Model.load('HPC_model.pt', device=device)
+    fig = visualize_model(
+        model=model,
+        dataset=dataset,
+        num_plots=12,
+        device=device,
+        exclude_context=False,
+        show_notes=False,
+        generate=True,
+        ground_truth=True,
+        seed=0
+        )
+    fig.show()

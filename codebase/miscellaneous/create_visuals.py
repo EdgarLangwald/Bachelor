@@ -596,3 +596,170 @@ def plot_full_track_scrollable(pedal_events, seed=42):
         )
     )
     return fig
+
+
+def plot_sampling_window(tokens: List, window_start: float = 2.0, window_size: float = 10.0,
+                         plot_start: float = 0.0, plot_end: float = 14.0, seed: int = 42):
+    """
+    Visualize the sampling window mechanism for the thesis.
+
+    Shows how the 10-second window cuts through segment data and how
+    new border tokens are created at window boundaries.
+
+    Args:
+        tokens: List of SegmentToken objects from the full track
+        window_start: Start time of the sampling window (default 2.0s)
+        window_size: Size of the sampling window (default 10.0s)
+        plot_start: Start time of the plot (default 0.0s)
+        plot_end: End time of the plot (default 14.0s)
+    """
+    from codebase.data import SegmentToken
+
+    np.random.seed(seed)
+    window_end = window_start + window_size
+
+    relevant_tokens = [t for t in tokens if plot_start <= t.time <= plot_end]
+    tokens_before = [t for t in tokens if t.time < plot_start]
+    tokens_after = [t for t in tokens if t.time > plot_end]
+    if tokens_before:
+        relevant_tokens.insert(0, tokens_before[-1])
+    if tokens_after:
+        relevant_tokens.append(tokens_after[0])
+    relevant_tokens = sorted(relevant_tokens, key=lambda t: t.time)
+
+    fig = go.Figure()
+
+    # Window shading as filled traces (added first so everything else is on top)
+    fig.add_trace(go.Scatter(
+        x=[plot_start, window_start, window_start, plot_start, plot_start],
+        y=[-0.05, -0.05, 1.05, 1.05, -0.05],
+        fill='toself', fillcolor='rgba(212,212,212,0.27)', mode='none',
+        line=dict(width=0), showlegend=False, hoverinfo='skip'
+    ))
+    fig.add_trace(go.Scatter(
+        x=[window_end, plot_end, plot_end, window_end, window_end],
+        y=[-0.05, -0.05, 1.05, 1.05, -0.05],
+        fill='toself', fillcolor='rgba(212,212,212,0.27)', mode='none',
+        line=dict(width=0), showlegend=False, hoverinfo='skip'
+    ))
+
+    # Vertical boundary lines as traces (added early so segments/points are on top)
+    fig.add_trace(go.Scatter(
+        x=[window_start, window_start], y=[-0.05, 1.05],
+        mode='lines', line=dict(color='black', width=2, dash='9px,6px'),
+        showlegend=False, hoverinfo='skip'
+    ))
+    fig.add_trace(go.Scatter(
+        x=[window_end, window_end], y=[-0.05, 1.05],
+        mode='lines', line=dict(color='black', width=2, dash='9px,6px'),
+        showlegend=False, hoverinfo='skip'
+    ))
+
+    # Original segments (all light blue)
+    for i in range(len(relevant_tokens) - 1):
+        t1, t2 = relevant_tokens[i], relevant_tokens[i + 1]
+        seg = segment(t1.time, t1.height, t2.time, t2.height, t2.amount)
+        seg_times = np.linspace(max(t1.time, plot_start), min(t2.time, plot_end), 100)
+        seg_values = [seg(t) for t in seg_times]
+        fig.add_trace(go.Scatter(
+            x=seg_times, y=seg_values, mode='lines',
+            name='Original Segments' if i == 0 else None,
+            line=dict(color='cornflowerblue', width=5.3),
+            showlegend=(i == 0), legendgroup='original'
+        ))
+
+    # Original tokens (orange, like 'Selected Points')
+    token_times = [t.time for t in relevant_tokens]
+    token_heights = [t.height for t in relevant_tokens]
+    fig.add_trace(go.Scatter(
+        x=token_times, y=token_heights, mode='markers',
+        name='Original Tokens',
+        marker=dict(color='orange', size=20, symbol='circle')
+    ))
+
+    # Compute windowed tokens (as in data.py)
+    windowed_tokens = [
+        SegmentToken(height=s.height, amount=s.amount, time=s.time)
+        for s in tokens if window_start < s.time < window_end
+    ]
+
+    # Left border token
+    left_border = None
+    left_token = None
+    right_token = None
+    for token in tokens:
+        if token.time <= window_start:
+            left_token = token
+        if token.time > window_start and right_token is None:
+            right_token = token
+            break
+    if left_token is not None and right_token is not None:
+        seg = segment(left_token.time, left_token.height, right_token.time, right_token.height, right_token.amount)
+        left_border = SegmentToken(height=seg(window_start), amount=0.0, time=window_start)
+
+    # Right border token
+    right_border = None
+    left_token_r = None
+    right_token_r = None
+    for token in tokens:
+        if token.time <= window_end:
+            left_token_r = token
+        if token.time > window_end and right_token_r is None:
+            right_token_r = token
+            break
+    if left_token_r is not None and right_token_r is not None:
+        seg = segment(left_token_r.time, left_token_r.height, right_token_r.time, right_token_r.height, right_token_r.amount)
+        right_border = SegmentToken(height=seg(window_end), amount=right_token_r.amount, time=window_end)
+
+    result_tokens = []
+    if left_border:
+        result_tokens.append(left_border)
+    result_tokens.extend(windowed_tokens)
+    if right_border:
+        result_tokens.append(right_border)
+    result_tokens = sorted(result_tokens, key=lambda t: t.time)
+
+    # Windowed segments (green for segments connecting to border tokens)
+    for i in range(len(result_tokens) - 1):
+        t1, t2 = result_tokens[i], result_tokens[i + 1]
+        seg = segment(t1.time, t1.height, t2.time, t2.height, t2.amount)
+        seg_times = np.linspace(t1.time, t2.time, 100)
+        seg_values = [seg(t) for t in seg_times]
+        is_border_segment = (t1.time == window_start or t2.time == window_end)
+        fig.add_trace(go.Scatter(
+            x=seg_times, y=seg_values, mode='lines',
+            name='New Segment' if is_border_segment and i == 0 else None,
+            line=dict(color='green' if is_border_segment else 'blue', width=5.3),
+            showlegend=is_border_segment and (i == 0 or (i > 0 and result_tokens[0].time != window_start)),
+            legendgroup='new_segment' if is_border_segment else 'windowed'
+        ))
+
+    # Windowed tokens (interior ones) - no legend entry, same style as original
+    interior_tokens = [t for t in result_tokens if t.time != window_start and t.time != window_end]
+    if interior_tokens:
+        fig.add_trace(go.Scatter(
+            x=[t.time for t in interior_tokens],
+            y=[t.height for t in interior_tokens],
+            mode='markers', showlegend=False,
+            marker=dict(color='orange', size=20, symbol='circle')
+        ))
+
+    # Border tokens (green circles)
+    border_tokens = [t for t in result_tokens if t.time == window_start or t.time == window_end]
+    if border_tokens:
+        fig.add_trace(go.Scatter(
+            x=[t.time for t in border_tokens],
+            y=[t.height for t in border_tokens],
+            mode='markers', name='Border Tokens',
+            marker=dict(color='green', size=24, symbol='circle')
+        ))
+
+    fig.update_layout(
+        xaxis_title='Time (s)',
+        yaxis_title='Pedal Value',
+        xaxis=dict(range=[plot_start, plot_end]),
+        yaxis=dict(range=[-0.05, 1.05]),
+        template='plotly_white',
+        width=1800, height=800
+    )
+    return fig

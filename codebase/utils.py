@@ -16,20 +16,21 @@ def save_pkl(data, filepath: str):
         pickle.dump(data, f)
 
 
-def plot_loss(filepath: str, detailed: bool = True, plot_lr: bool = False, title: str = 'Training Loss'):
+def plot_loss(filepath: str, detailed: bool = True, plot_lr: bool = False, title: str = 'Training Loss', width: int = 800, height: int = 500):
     load_path = Path("saves") / filepath
 
     with open(load_path, 'rb') as f:
         loss_history = pickle.load(f)
 
-    steps = [entry['step'] for entry in loss_history]
-    total_losses = [entry['losses']['total'] for entry in loss_history]
+    valid_entries = [e for e in loss_history if e['losses']['total'] is not None]
+    steps = [entry['step'] for entry in valid_entries]
+    total_losses = [entry['losses']['total'] for entry in valid_entries]
 
     fig = go.Figure()
 
     if detailed:
-        segment_losses = [entry['losses']['segment'] for entry in loss_history]
-        param_losses = [entry['losses']['param'] for entry in loss_history]
+        segment_losses = [entry['losses']['segment'] for entry in valid_entries]
+        param_losses = [entry['losses']['param'] for entry in valid_entries]
         sum_losses = [s + p for s, p in zip(segment_losses, param_losses)]
 
         fig.add_trace(go.Scatter(
@@ -37,7 +38,7 @@ def plot_loss(filepath: str, detailed: bool = True, plot_lr: bool = False, title
             y=sum_losses,
             mode='lines',
             name='Sum',
-            line=dict(color='blue', width=2)
+            line=dict(color='blue', width=3.4)
         ))
 
         fig.add_trace(go.Scatter(
@@ -45,7 +46,7 @@ def plot_loss(filepath: str, detailed: bool = True, plot_lr: bool = False, title
             y=segment_losses,
             mode='lines',
             name='Segment Loss',
-            line=dict(color='red', width=2)
+            line=dict(color='red', width=3.4)
         ))
 
         fig.add_trace(go.Scatter(
@@ -53,7 +54,7 @@ def plot_loss(filepath: str, detailed: bool = True, plot_lr: bool = False, title
             y=param_losses,
             mode='lines',
             name='Param Loss',
-            line=dict(color='green', width=2)
+            line=dict(color='green', width=3.4)
         ))
     else:
         fig.add_trace(go.Scatter(
@@ -61,31 +62,38 @@ def plot_loss(filepath: str, detailed: bool = True, plot_lr: bool = False, title
             y=total_losses,
             mode='lines',
             name='Total Loss',
-            line=dict(color='blue', width=2)
+            line=dict(color='blue', width=3.4)
         ))
 
     if plot_lr:
+        lr_steps = [entry['step'] for entry in loss_history]
         lrs = [entry['lr'] for entry in loss_history]
         max_lr = max(lrs)
         lrs_normalized = [lr / max_lr for lr in lrs]
         fig.add_trace(go.Scatter(
-            x=steps,
+            x=lr_steps,
             y=lrs_normalized,
             mode='lines',
-            name=f'LR (normalized, max={max_lr:.2e})',
-            line=dict(color='purple', width=2, dash='dash')
+            name=f'LR (normalized)',
+            line=dict(color='purple', width=3.4, dash='7px 3px')
         ))
 
     fig.update_layout(
-        title=title,
+        title=dict(text=title, font=dict(size=27)),
         xaxis_title='Steps',
         hovermode='x unified',
-        legend=dict(yanchor="top", y=0.99, xanchor="right", x=0.99)
+        legend=dict(yanchor="top", y=0.99, xanchor="right", x=0.99, font=dict(size=20)),
+        font=dict(size=20),
+        width=width,
+        height=height
     )
+    if detailed:
+        first_loss = segment_losses[0] + param_losses[0]
+    else:
+        first_loss = total_losses[0]
     fig.update_yaxes(
         title_text="Loss",
-        range=[0, 3.9],
-        tickvals=[0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5]
+        range=[0, first_loss + 0.3]
     )
 
     return fig
